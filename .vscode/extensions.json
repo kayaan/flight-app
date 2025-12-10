@@ -1,0 +1,11 @@
+{
+  "recommendations": [
+    // "bradlc.vscode-tailwindcss",        // falls du Tailwind nutzt
+    "dbaeumer.vscode-eslint",
+    "ms-vscode.vscode-typescript-next",
+    "yoavbls.pretty-ts-errors",         // wunderschöne TS-Fehler in VS Code
+    // "vitest.explorer",                  // falls du Vitest nutzt
+    // "ms-playwright.playwright",         // falls du Playwright nutzt
+    "usernamehw.errorlens"              // Fehler inline hervorheben
+  ]
+}

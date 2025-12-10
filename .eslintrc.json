@@ -1,0 +1,62 @@
+"parser": "@typescript-eslint/parser",
+"plugins": [
+    "@typescript-eslint",
+    "react",
+    "react-hooks",
+    "import"
+],
+"extends": [
+    "eslint:recommended",
+    "plugin:@typescript-eslint/recommended",
+    "plugin:react/recommended",
+    "plugin:react-hooks/recommended",
+    "plugin:import/recommended"
+],
+"rules": {
+    // Formatierung ersetzen Prettier
+    "semi": [
+        "error",
+        "always"
+    ],
+    "quotes": [
+        "error",
+        "single"
+    ],
+    "indent": [
+        "error",
+        2
+    ],
+    "comma-dangle": [
+        "error",
+        "always-multiline"
+    ],
+    "object-curly-spacing": [
+        "error",
+        "always"
+    ],
+    "array-bracket-spacing": [
+        "error",
+        "never"
+    ],
+    "space-before-blocks": [
+        "error",
+        "always"
+    ],
+    "keyword-spacing": [
+        "error",
+        {
+            "before": true,
+            "after": true
+        }
+    ],
+    "brace-style": [
+        "error",
+        "1tbs"
+    ],
+    "max-len": [
+        "warn",
+        {
+            "code": 120
+        }
+    ]
+}
