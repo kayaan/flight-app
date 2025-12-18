@@ -8,8 +8,8 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "router:gen": "tanstack-router generate",
-    "router:watch": "tanstack-router generate --watch"
+    "router:gen": "npx @tanstack/router-cli generate",
+    "router:watch": "npx @tanstack/router-cli generate --watch"
   },
   "dependencies": {
     "@tanstack/react-router": "^1.141.6",
