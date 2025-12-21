@@ -1,1 +1,7 @@
 > npx @tanstack/router-cli generate
+
+
+ich habe ein frontend mit react typescript zustand featurebasiert. 
+
+
+ich habe ein frontend mit react typescript zustand und tanstack router und featurebasiert. ich habe auch 3 seiten: home und about und login. ich will den jwt token vom node api holen und in zustand speichern. wie gehe ich vor?
