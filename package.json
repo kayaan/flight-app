@@ -12,6 +12,8 @@
     "router:watch": "npx @tanstack/router-cli generate --watch"
   },
   "dependencies": {
+    "@mantine/core": "^8.3.11",
+    "@mantine/hooks": "^8.3.11",
     "@tanstack/react-router": "^1.141.6",
     "@tanstack/router-devtools": "^1.140.1",
     "react": "^19.2.0",

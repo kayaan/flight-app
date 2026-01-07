@@ -5,6 +5,8 @@ import './index.css'
 import { routeTree } from './routeTree.gen'
 import { createRouter, RouterProvider } from '@tanstack/react-router'
 
+import '@mantine/core/styles.css'
+
 const router = createRouter({ routeTree })
 
 declare module '@tanstack/react-router' {
