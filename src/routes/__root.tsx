@@ -1,6 +1,10 @@
 import { createRootRoute, Link, Outlet } from "@tanstack/react-router";
 import { useAuthStore } from "../features/auth/store/auth.store";
 import { useAuthUser, useIsAuthenticated } from "../features/auth/store/auth.selector";
+import { useOpenLoginModal } from "../store/ui.selectors";
+import { LoginModal } from "../features/auth/ui/LoginModal";
+import { Button, Group, Text } from "@mantine/core";
+import { IconLock } from "@tabler/icons-react";
 
 
 
@@ -10,10 +14,12 @@ export const Route = createRootRoute({
 
 function RootLayout() {
 
-    const { logout } = useAuthStore()
+    const logout = useAuthStore((s) => s.logout)
 
     const isAuthenticated = useIsAuthenticated()
     const user = useAuthUser()
+
+    const openLoginModal = useOpenLoginModal();
 
     return (
         <div>
@@ -25,11 +31,27 @@ function RootLayout() {
             }}>
                 <div style={{ display: 'flex', gap: 12 }}>
                     <Link to="/">Home</Link>
+                    <Link
+                        to="/personal"
+                        style={{
+                            textDecoration: "none",
+                            color: "inherit",
+                            opacity: isAuthenticated ? 1 : 0.7,
+                        }}
+                    >
+                        <Group gap={4}>
+                            <Text>Personal</Text>
+                            {!isAuthenticated && <IconLock size={14} />}
+                        </Group>
+                    </Link>
                     <Link to="/about">About</Link>
                 </div>
 
                 <div>
-                    {!isAuthenticated && <Link to="/login">Login</Link>}
+                    {!isAuthenticated &&
+                        <Button
+                            onClick={() => openLoginModal('manual')}>Login</Button>
+                    }
                     {isAuthenticated && user && (
                         <div
                             style={{
@@ -45,15 +67,15 @@ function RootLayout() {
                             <span>
                                 {user.firstname} {user.lastname}
                             </span>
-                            <button onClick={logout}>
-                                Logout
-                            </button>
+                            <Button onClick={logout}>Logout</Button>
                         </div>
                     )}
 
                 </div>
             </nav>
             <hr />
+
+            <LoginModal />
             <Outlet />
         </div>
 
