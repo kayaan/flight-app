@@ -4,8 +4,6 @@ import type { ZodType } from 'zod'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:3000";
 
-
-
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function parseJsonSave(res: Response): Promise<any> {
     const text = await res.text();
@@ -27,12 +25,16 @@ async function request<T>(
     } = {}
 ) {
 
-    const { token, headers, ...rest } = options;
+    const { token, headers, body, ...rest } = options;;
+
+    const isFormData = body instanceof FormData;
+
 
     const res = await fetch(`${API_BASE_URL}${path}`, {
         ...rest,
+        body,
         headers: {
-            "Content-Type": "application/json",
+            ...(isFormData ? {} : { "Content-Type": "application/json" }),
             ...(token ? { Authorization: `Bearer ${token}` } : {}),
             ...(headers ?? {}),
         },
@@ -78,3 +80,5 @@ export const authApi = {
         });
     },
 }
+
+export default request;

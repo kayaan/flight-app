@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as PersonalRouteImport } from './routes/personal'
 import { Route as LoginRouteImport } from './routes/login'
+import { Route as FlightsRouteImport } from './routes/flights'
 import { Route as AboutRouteImport } from './routes/about'
 import { Route as IndexRouteImport } from './routes/index'
 
@@ -22,6 +23,11 @@ const PersonalRoute = PersonalRouteImport.update({
 const LoginRoute = LoginRouteImport.update({
   id: '/login',
   path: '/login',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const FlightsRoute = FlightsRouteImport.update({
+  id: '/flights',
+  path: '/flights',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AboutRoute = AboutRouteImport.update({
@@ -38,12 +44,14 @@ const IndexRoute = IndexRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/about': typeof AboutRoute
+  '/flights': typeof FlightsRoute
   '/login': typeof LoginRoute
   '/personal': typeof PersonalRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/about': typeof AboutRoute
+  '/flights': typeof FlightsRoute
   '/login': typeof LoginRoute
   '/personal': typeof PersonalRoute
 }
@@ -51,20 +59,22 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/about': typeof AboutRoute
+  '/flights': typeof FlightsRoute
   '/login': typeof LoginRoute
   '/personal': typeof PersonalRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/about' | '/login' | '/personal'
+  fullPaths: '/' | '/about' | '/flights' | '/login' | '/personal'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/about' | '/login' | '/personal'
-  id: '__root__' | '/' | '/about' | '/login' | '/personal'
+  to: '/' | '/about' | '/flights' | '/login' | '/personal'
+  id: '__root__' | '/' | '/about' | '/flights' | '/login' | '/personal'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AboutRoute: typeof AboutRoute
+  FlightsRoute: typeof FlightsRoute
   LoginRoute: typeof LoginRoute
   PersonalRoute: typeof PersonalRoute
 }
@@ -83,6 +93,13 @@ declare module '@tanstack/react-router' {
       path: '/login'
       fullPath: '/login'
       preLoaderRoute: typeof LoginRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/flights': {
+      id: '/flights'
+      path: '/flights'
+      fullPath: '/flights'
+      preLoaderRoute: typeof FlightsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/about': {
@@ -105,6 +122,7 @@ declare module '@tanstack/react-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AboutRoute: AboutRoute,
+  FlightsRoute: FlightsRoute,
   LoginRoute: LoginRoute,
   PersonalRoute: PersonalRoute,
 }

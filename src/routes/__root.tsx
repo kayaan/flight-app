@@ -3,7 +3,7 @@ import { useAuthStore } from "../features/auth/store/auth.store";
 import { useAuthUser, useIsAuthenticated } from "../features/auth/store/auth.selector";
 import { useOpenLoginModal } from "../store/ui.selectors";
 import { LoginModal } from "../features/auth/ui/LoginModal";
-import { Button, Group, Text } from "@mantine/core";
+import { Button } from "@mantine/core";
 import { IconLock } from "@tabler/icons-react";
 
 
@@ -30,21 +30,36 @@ function RootLayout() {
                 padding: '8px 16px'
             }}>
                 <div style={{ display: 'flex', gap: 12 }}>
-                    <Link to="/">Home</Link>
-                    <Link
-                        to="/personal"
-                        style={{
-                            textDecoration: "none",
-                            color: "inherit",
-                            opacity: isAuthenticated ? 1 : 0.7,
-                        }}
+                    <Button
+                        variant="subtle"
+                        component={Link}
+                        to="/"
                     >
-                        <Group gap={4}>
-                            <Text>Personal</Text>
-                            {!isAuthenticated && <IconLock size={14} />}
-                        </Group>
-                    </Link>
-                    <Link to="/about">About</Link>
+                        Home
+                    </Button>
+                    <Button
+                        variant="subtle"
+                        component={Link}
+                        to="/personal"
+                        leftSection={!isAuthenticated ? <IconLock size={14} /> : undefined}
+                    >
+                        Personal
+                    </Button>
+                    <Button
+                        variant="subtle"
+                        component={Link}
+                        to="/flights"
+                        leftSection={!isAuthenticated ? <IconLock size={14} /> : undefined}
+                    >
+                        Flights
+                    </Button>
+                    <Button
+                        variant="subtle"
+                        component={Link}
+                        to="/about"
+                    >
+                        About
+                    </Button>
                 </div>
 
                 <div>
