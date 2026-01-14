@@ -15,7 +15,14 @@ import { FlightsTable } from "./FlightsTable"; // <- from my previous file
 import type { FlightRecordDetails } from "./flights.types";
 import { useAuthStore } from "../auth/store/auth.store";
 import { flightApi } from "./flights.api";
-/* eslint-disable @typescript-eslint/no-explicit-any */
+import { modals } from "@mantine/modals";
+
+function getErrorMessage(err: unknown, fallback: string) {
+    if (err instanceof Error && err.message) {
+        return err.message;
+    }
+    return fallback;
+}
 
 export function FlightsPage() {
     const token = useAuthStore((s) => s.token);
@@ -27,24 +34,57 @@ export function FlightsPage() {
 
     const [deletingAll, setDeletingAll] = React.useState(false);
 
-    async function load() {
+    const [deletingId, setDeletingId] = React.useState<number | null>(null);
+
+
+    const confirmDeleteFlight = async (id: number, originalFilename?: string) => {
+        modals.openConfirmModal({
+            title: "Flight löschen?",
+            children: (
+                <Text size="sm">
+                    Willst du diesen Flug wirklich löschen
+                    {originalFilename ? `: ${originalFilename}` : ""}? Das kann nicht rückgängig gemacht werden.
+                </Text>
+            ),
+            labels: { confirm: "Löschen", cancel: "Abbrechen" },
+            confirmProps: { color: "red" },
+            onConfirm: () => deleteFlight(id),
+        });
+
+    }
+
+    const deleteFlight = async (id: number) => {
+        if (!token) return;
+
+        setDeletingId(id);
+
+        try {
+            await flightApi.remove(id, token);
+            await load();
+        } catch (e) {
+            setError(getErrorMessage(e, 'Failed to delete flight'));
+        } finally {
+            setDeletingId(null);
+        }
+    }
+
+    const load = React.useCallback(async () => {
         if (!token) return;
         setLoading(true);
         setError(null);
         try {
             const data = await flightApi.list(token);
             setRows(data);
-        } catch (e: any) {
-            setError(e?.message ?? "Failed to load flights");
+        } catch (e: unknown) {
+            setError(getErrorMessage(e, "Failed to load flights"));
         } finally {
             setLoading(false);
         }
-    }
+    }, [token]);
 
     React.useEffect(() => {
         load();
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [token]);
+    }, [load]);
 
     async function uploadMany(files: File[]) {
         if (!files || files.length === 0) {
@@ -59,17 +99,23 @@ export function FlightsPage() {
 
 
         try {
-            const created = await flightApi.uploadMany(files, token);
+            const uploadedFlights = await flightApi.uploadMany(files, token);
+
+
             // simplest UX: prepend new item
-            setRows((prev) => [...created, ...prev]);
-        } catch (e: any) {
-            setError(e?.message ?? "Upload failed");
+            setRows((prev) => [...uploadedFlights.inserted, ...prev]);
+        } catch (e: unknown) {
+            setError(getErrorMessage(e, "Upload failed"));
         } finally {
             setUploading(false);
         }
     }
 
     async function deleteAll() {
+        if (!token) {
+            setError("Not authenticated");
+            return;
+        }
         if (!confirm("Delete ALL flights? This cannot be undone.")) return;
 
         setDeletingAll(true);
@@ -77,10 +123,10 @@ export function FlightsPage() {
 
         try {
             await flightApi.deleteAll(token);
-            await Promise.resolve(load());
+            await load();
 
-        } catch (e: any) {
-            setError(e?.message ?? "Delete all failed");
+        } catch (e: unknown) {
+            setError(getErrorMessage(e, "Delete all failed"));
         } finally {
             setDeletingAll(false);
         }
@@ -95,6 +141,7 @@ export function FlightsPage() {
     }
 
     const busy = loading || uploading || deletingAll;
+    const actionsDisabled = loading || uploading || deletingAll;
 
     return (
         <Stack gap="md">
@@ -108,7 +155,7 @@ export function FlightsPage() {
                 </div>
 
                 <Group>
-                    <Button variant="light" onClick={load} disabled={loading || uploading}>
+                    <Button variant="light" onClick={load} disabled={actionsDisabled}>
                         Refresh
                     </Button>
 
@@ -116,7 +163,7 @@ export function FlightsPage() {
                         color="red"
                         variant="light"
                         onClick={deleteAll}
-                        disabled={loading || uploading}
+                        disabled={actionsDisabled}
                     >
                         Delete all
                     </Button>
@@ -127,7 +174,7 @@ export function FlightsPage() {
                                 {...props}
                                 leftSection={<IconUpload size={16} />}
                                 loading={uploading}
-                                disabled={loading}
+                                disabled={actionsDisabled}
                             >
                                 Upload IGC
                             </Button>
@@ -147,7 +194,12 @@ export function FlightsPage() {
                     <Loader />
                 </Group>
             ) : (
-                <FlightsTable flights={rows} />
+                <FlightsTable
+                    flights={rows}
+                    deletingId={deletingId}
+                    onDelete={confirmDeleteFlight}
+
+                />
             )}
         </Stack>
     );

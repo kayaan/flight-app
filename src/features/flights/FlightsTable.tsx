@@ -1,7 +1,7 @@
 import { ActionIcon, Badge, Button, CopyButton, Divider, Drawer, Group, ScrollArea, Select, Stack, Table, Text, TextInput, Tooltip } from "@mantine/core";
 import type { FlightRecordDetails } from "./flights.types";
 import React from "react";
-import { IconCheck, IconCopy, IconEye, IconSearch } from "@tabler/icons-react";
+import { IconCheck, IconCopy, IconEye, IconSearch, IconTrash } from "@tabler/icons-react";
 
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -104,7 +104,20 @@ function SortHeader({
     );
 }
 
-export function FlightsTable({ flights }: { flights: FlightRecordDetails[] }) {
+
+export interface FlightsTableProps {
+    flights: FlightRecordDetails[];
+    deletingId?: number | null;
+    onDelete: (id: number, originalFilename?: string) => void;
+}
+
+export function FlightsTable(
+    {
+        flights,
+        deletingId = null,
+        onDelete
+
+    }: FlightsTableProps) {
     const [q, setQ] = React.useState("");
     const [visibility, setVisibility] = React.useState<FlightRecordDetails["visibility"] | "all">("all");
     const [verified, setVerified] = React.useState<"all" | "yes" | "no">("all");
@@ -328,6 +341,17 @@ export function FlightsTable({ flights }: { flights: FlightRecordDetails[] }) {
                                         <Tooltip label="Details">
                                             <ActionIcon variant="light" onClick={() => openDetails(f)}>
                                                 <IconEye size={16} />
+                                            </ActionIcon>
+                                        </Tooltip>
+
+                                        <Tooltip label="Delete flight">
+                                            <ActionIcon
+                                                variant="light"
+                                                color="red"
+                                                loading={deletingId === f.id}
+                                                disabled={deletingId !== null}
+                                                onClick={() => onDelete(f.id, f.originalFilename)}>
+                                                <IconTrash size={16} />
                                             </ActionIcon>
                                         </Tooltip>
                                     </Group>

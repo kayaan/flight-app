@@ -44,12 +44,18 @@ export const flightApi = {
         )
     },
 
-    uploadMany(files: File[], token: string): Promise<FlightRecordDetails[]> {
+    uploadMany(files: File[], token: string): Promise<{
+        inserted: FlightRecordDetails[];
+        skipped: Array<{ originalFilename: string; reason: 'duplicate' }>;
+    }> {
         const formData = new FormData();
 
         for (const file of files) formData.append('files', file);
 
-        return request<FlightRecordDetails[]>(
+        return request<{
+            inserted: FlightRecordDetails[];
+            skipped: Array<{ originalFilename: string; reason: 'duplicate' }>;
+        }>(
             '/api/flights',
             {
                 method: 'POST',
