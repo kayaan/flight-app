@@ -1,4 +1,4 @@
-import { ActionIcon, Badge, Button, CopyButton, Divider, Drawer, Group, ScrollArea, Select, Stack, Table, Text, TextInput, Tooltip } from "@mantine/core";
+import { ActionIcon, Badge, Button, CopyButton, Divider, Drawer, Group, ScrollArea, Select, Stack, Table, Text, TextInput, Tooltip, LoadingOverlay, Box } from "@mantine/core";
 import type { FlightRecordDetails } from "./flights.types";
 import React from "react";
 import { IconCheck, IconCopy, IconEye, IconSearch, IconTrash } from "@tabler/icons-react";
@@ -128,6 +128,8 @@ export function FlightsTable(
     const [opened, setOpened] = React.useState(false);
     const [selected, setSelected] = React.useState<FlightRecordDetails | null>(null);
 
+    const [sortBusy, setSortBusy] = React.useState(false);
+
     const filtered = React.useMemo(() => {
         const needle = q.trim().toLowerCase();
 
@@ -160,6 +162,13 @@ export function FlightsTable(
         });
     }, [flights, q, visibility, verified]);
 
+    React.useEffect(() => {
+        if (!sortBusy) return;
+
+        // nach dem Render, der durch sortKey/sortDir ausgelöst wurde, Overlay wieder aus
+        requestAnimationFrame(() => setSortBusy(false));
+    }, [sortKey, sortDir, sortBusy]);
+
     const sorted = React.useMemo(() => {
         const copy = [...filtered];
         copy.sort((a, b) => compare(a, b, sortKey, sortDir));
@@ -167,13 +176,19 @@ export function FlightsTable(
     }, [filtered, sortKey, sortDir]);
 
     function toggleSort(key: SortKey) {
-        if (sortKey === key) {
-            setSortDir((d) => (d === "asc" ? "desc" : "asc"));
-        } else {
-            setSortKey(key);
-            // sensible defaults:
-            setSortDir(key === "pilotName" || key === "gliderType" || key === "visibility" ? "asc" : "desc");
-        }
+        // 1) Overlay sofort an (Render kann passieren bevor wir sortKey/sortDir ändern)
+        setSortBusy(true);
+
+        // 2) Sort-State im nächsten Frame setzen -> Overlay wird sichtbar bevor Render-Arbeit startet
+        requestAnimationFrame(() => {
+            if (sortKey === key) {
+                setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+            } else {
+                setSortKey(key);
+                // sensible defaults:
+                setSortDir(key === "pilotName" || key === "gliderType" || key === "visibility" ? "asc" : "desc");
+            }
+        });
     }
 
     function openDetails(f: FlightRecordDetails) {
@@ -218,159 +233,165 @@ export function FlightsTable(
                 />
             </Group>
 
-            <ScrollArea>
-                <Table striped highlightOnHover withTableBorder withColumnBorders>
-                    <Table.Thead>
-                        <Table.Tr>
-                            <Table.Th>
-                                <SortHeader
-                                    label="Date"
-                                    active={sortKey === "flightDate"}
-                                    dir={sortDir}
-                                    onClick={() => toggleSort("flightDate")}
-                                />
-                            </Table.Th>
-                            <Table.Th>
-                                <SortHeader
-                                    label="Pilot"
-                                    active={sortKey === "pilotName"}
-                                    dir={sortDir}
-                                    onClick={() => toggleSort("pilotName")}
-                                />
-                            </Table.Th>
-                            <Table.Th>
-                                <SortHeader
-                                    label="Glider"
-                                    active={sortKey === "gliderType"}
-                                    dir={sortDir}
-                                    onClick={() => toggleSort("gliderType")}
-                                />
-                            </Table.Th>
-                            <Table.Th>
-                                <SortHeader
-                                    label="Takeoff"
-                                    active={sortKey === "takeoffTime"}
-                                    dir={sortDir}
-                                    onClick={() => toggleSort("takeoffTime")}
-                                />
-                            </Table.Th>
-                            <Table.Th>
-                                <SortHeader
-                                    label="Landing"
-                                    active={sortKey === "landingTime"}
-                                    dir={sortDir}
-                                    onClick={() => toggleSort("landingTime")}
-                                />
-                            </Table.Th>
-                            <Table.Th>
-                                <SortHeader
-                                    label="Duration"
-                                    active={sortKey === "durationSeconds"}
-                                    dir={sortDir}
-                                    onClick={() => toggleSort("durationSeconds")}
-                                />
-                            </Table.Th>
-                            <Table.Th>
-                                <SortHeader
-                                    label="Distance (km)"
-                                    active={sortKey === "distanceKm"}
-                                    dir={sortDir}
-                                    onClick={() => toggleSort("distanceKm")}
-                                />
-                            </Table.Th>
-                            <Table.Th>
-                                <SortHeader
-                                    label="Max alt"
-                                    active={sortKey === "maxAltitude"}
-                                    dir={sortDir}
-                                    onClick={() => toggleSort("maxAltitude")}
-                                />
-                            </Table.Th>
-                            <Table.Th>
-                                <SortHeader
-                                    label="Verified"
-                                    active={sortKey === "isVerified"}
-                                    dir={sortDir}
-                                    onClick={() => toggleSort("isVerified")}
-                                />
-                            </Table.Th>
-                            <Table.Th>
-                                <SortHeader
-                                    label="Visibility"
-                                    active={sortKey === "visibility"}
-                                    dir={sortDir}
-                                    onClick={() => toggleSort("visibility")}
-                                />
-                            </Table.Th>
-                            <Table.Th>
-                                <SortHeader
-                                    label="Uploaded"
-                                    active={sortKey === "uploadedAt"}
-                                    dir={sortDir}
-                                    onClick={() => toggleSort("uploadedAt")}
-                                />
-                            </Table.Th>
-                            <Table.Th />
-                        </Table.Tr>
-                    </Table.Thead>
+            <Box pos="relative">
+                <LoadingOverlay visible={sortBusy} />
 
-                    <Table.Tbody>
-                        {sorted.map((f) => (
-                            <Table.Tr key={f.id}>
-                                <Table.Td>{f.flightDate}</Table.Td>
-                                <Table.Td>{f.pilotName}</Table.Td>
-                                <Table.Td>{f.gliderType}</Table.Td>
-                                <Table.Td>{formatDateString(f.takeoffTime ?? "-")}</Table.Td>
-                                <Table.Td>{formatDateString(f.landingTime ?? "-")}</Table.Td>
-                                <Table.Td>{formatDuration(f.durationSeconds)}</Table.Td>
-                                <Table.Td>{Number.isFinite(f.distanceKm) ? f.distanceKm.toFixed(1) : "-"}</Table.Td>
-                                <Table.Td>{Number.isFinite(f.maxAltitude) ? Math.round(f.maxAltitude) : "-"}</Table.Td>
-                                <Table.Td>
-                                    <VerifiedBadge value={f.isVerified} />
-                                </Table.Td>
-                                <Table.Td>
-                                    <VisibilityBadge value={f.visibility} />
-                                </Table.Td>
-                                <Table.Td>
-                                    <Text size="sm" style={{ whiteSpace: "nowrap" }}>
-                                        {formatDateString(f.uploadedAt)}
-                                    </Text>
-                                </Table.Td>
-                                <Table.Td>
-                                    <Group gap={6} justify="end" wrap="nowrap">
-                                        <Tooltip label="Details">
-                                            <ActionIcon variant="light" onClick={() => openDetails(f)}>
-                                                <IconEye size={16} />
-                                            </ActionIcon>
-                                        </Tooltip>
-
-                                        <Tooltip label="Delete flight">
-                                            <ActionIcon
-                                                variant="light"
-                                                color="red"
-                                                loading={deletingId === f.id}
-                                                disabled={deletingId !== null}
-                                                onClick={() => onDelete(f.id, f.originalFilename)}>
-                                                <IconTrash size={16} />
-                                            </ActionIcon>
-                                        </Tooltip>
-                                    </Group>
-                                </Table.Td>
-                            </Table.Tr>
-                        ))}
-
-                        {sorted.length === 0 && (
+                <ScrollArea>
+                    <Table striped highlightOnHover withTableBorder withColumnBorders>
+                        <Table.Thead>
                             <Table.Tr>
-                                <Table.Td colSpan={13}>
-                                    <Text c="dimmed" size="sm">
-                                        No flights found.
-                                    </Text>
-                                </Table.Td>
+                                <Table.Th>
+                                    <SortHeader
+                                        label="Date"
+                                        active={sortKey === "flightDate"}
+                                        dir={sortDir}
+                                        onClick={() => toggleSort("flightDate")}
+                                    />
+                                </Table.Th>
+                                <Table.Th>
+                                    <SortHeader
+                                        label="Pilot"
+                                        active={sortKey === "pilotName"}
+                                        dir={sortDir}
+                                        onClick={() => toggleSort("pilotName")}
+                                    />
+                                </Table.Th>
+                                <Table.Th>
+                                    <SortHeader
+                                        label="Glider"
+                                        active={sortKey === "gliderType"}
+                                        dir={sortDir}
+                                        onClick={() => toggleSort("gliderType")}
+                                    />
+                                </Table.Th>
+                                <Table.Th>
+                                    <SortHeader
+                                        label="Takeoff"
+                                        active={sortKey === "takeoffTime"}
+                                        dir={sortDir}
+                                        onClick={() => toggleSort("takeoffTime")}
+                                    />
+                                </Table.Th>
+                                <Table.Th>
+                                    <SortHeader
+                                        label="Landing"
+                                        active={sortKey === "landingTime"}
+                                        dir={sortDir}
+                                        onClick={() => toggleSort("landingTime")}
+                                    />
+                                </Table.Th>
+                                <Table.Th>
+                                    <SortHeader
+                                        label="Duration"
+                                        active={sortKey === "durationSeconds"}
+                                        dir={sortDir}
+                                        onClick={() => toggleSort("durationSeconds")}
+                                    />
+                                </Table.Th>
+                                <Table.Th>
+                                    <SortHeader
+                                        label="Distance (km)"
+                                        active={sortKey === "distanceKm"}
+                                        dir={sortDir}
+                                        onClick={() => toggleSort("distanceKm")}
+                                    />
+                                </Table.Th>
+                                <Table.Th>
+                                    <SortHeader
+                                        label="Max alt"
+                                        active={sortKey === "maxAltitude"}
+                                        dir={sortDir}
+                                        onClick={() => toggleSort("maxAltitude")}
+                                    />
+                                </Table.Th>
+                                <Table.Th>
+                                    <SortHeader
+                                        label="Verified"
+                                        active={sortKey === "isVerified"}
+                                        dir={sortDir}
+                                        onClick={() => toggleSort("isVerified")}
+                                    />
+                                </Table.Th>
+                                <Table.Th>
+                                    <SortHeader
+                                        label="Visibility"
+                                        active={sortKey === "visibility"}
+                                        dir={sortDir}
+                                        onClick={() => toggleSort("visibility")}
+                                    />
+                                </Table.Th>
+                                <Table.Th>
+                                    <SortHeader
+                                        label="Uploaded"
+                                        active={sortKey === "uploadedAt"}
+                                        dir={sortDir}
+                                        onClick={() => toggleSort("uploadedAt")}
+                                    />
+                                </Table.Th>
+                                <Table.Th />
                             </Table.Tr>
-                        )}
-                    </Table.Tbody>
-                </Table>
-            </ScrollArea>
+                        </Table.Thead>
+
+                        <Table.Tbody>
+                            {sorted.map((f) => (
+                                <Table.Tr key={f.id}>
+                                    <Table.Td>{f.flightDate}</Table.Td>
+                                    <Table.Td>{f.pilotName}</Table.Td>
+                                    <Table.Td>{f.gliderType}</Table.Td>
+                                    <Table.Td>{formatDateString(f.takeoffTime ?? "-")}</Table.Td>
+                                    <Table.Td>{formatDateString(f.landingTime ?? "-")}</Table.Td>
+                                    <Table.Td>{formatDuration(f.durationSeconds)}</Table.Td>
+                                    <Table.Td>{Number.isFinite(f.distanceKm) ? f.distanceKm.toFixed(1) : "-"}</Table.Td>
+                                    <Table.Td>{Number.isFinite(f.maxAltitude) ? Math.round(f.maxAltitude) : "-"}</Table.Td>
+                                    <Table.Td>
+                                        <VerifiedBadge value={f.isVerified} />
+                                    </Table.Td>
+                                    <Table.Td>
+                                        <VisibilityBadge value={f.visibility} />
+                                    </Table.Td>
+                                    <Table.Td>
+                                        <Text size="sm" style={{ whiteSpace: "nowrap" }}>
+                                            {formatDateString(f.uploadedAt)}
+                                        </Text>
+                                    </Table.Td>
+                                    <Table.Td>
+                                        <Group gap={6} justify="end" wrap="nowrap">
+                                            <Tooltip label="Details">
+                                                <ActionIcon variant="light" onClick={() => openDetails(f)}>
+                                                    <IconEye size={16} />
+                                                </ActionIcon>
+                                            </Tooltip>
+
+                                            <Tooltip label="Delete flight">
+                                                <ActionIcon
+                                                    variant="light"
+                                                    color="red"
+                                                    loading={deletingId === f.id}
+                                                    disabled={deletingId !== null}
+                                                    onClick={() => onDelete(f.id, f.originalFilename)}>
+                                                    <IconTrash size={16} />
+                                                </ActionIcon>
+                                            </Tooltip>
+                                        </Group>
+                                    </Table.Td>
+                                </Table.Tr>
+                            ))}
+
+                            {sorted.length === 0 && (
+                                <Table.Tr>
+                                    <Table.Td colSpan={13}>
+                                        <Text c="dimmed" size="sm">
+                                            No flights found.
+                                        </Text>
+                                    </Table.Td>
+                                </Table.Tr>
+                            )}
+                        </Table.Tbody>
+                    </Table>
+                </ScrollArea>
+
+
+            </Box>
 
             <Drawer opened={opened} onClose={() => setOpened(false)} title="Flight details" position="right" size="md">
                 {selected ? (
