@@ -37,6 +37,21 @@ export function FlightsPage() {
     const [deletingId, setDeletingId] = React.useState<number | null>(null);
 
 
+    const dateRange = React.useMemo(() => {
+        if (rows.length === 0) return null;
+
+        const dates = rows
+            .map((r) => new Date(r.flightDate))
+            .filter((d) => !isNaN(d.getTime()));
+
+        if (dates.length === 0) return null;
+
+        const min = new Date(Math.min(...dates.map((d) => d.getTime())));
+        const max = new Date(Math.max(...dates.map((d) => d.getTime())));
+
+        return { min, max };
+    }, [rows]);
+
     const confirmDeleteFlight = async (id: number, originalFilename?: string) => {
         modals.openConfirmModal({
             title: "Flight löschen?",
@@ -148,7 +163,13 @@ export function FlightsPage() {
             <LoadingOverlay visible={busy} zIndex={1000} overlayProps={{ radius: "md", blur: 1 }} />
             <Group justify="space-between" align="center">
                 <div>
-                    <Title order={2}>Flights</Title>
+                    <Title order={2}>Flights {rows.length}
+                        {dateRange && (
+                            <Text span c="dimmed" size="sm" ml="sm">
+                                ({dateRange.min.toLocaleDateString()} – {dateRange.max.toLocaleDateString()})
+                            </Text>
+                        )}
+                    </Title>
                     <Text c="dimmed" size="sm">
                         Upload IGC and manage metadata
                     </Text>
