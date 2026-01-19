@@ -257,7 +257,7 @@ function FlightDetailsRoute() {
           // Y: zuerst der Wert (deine Serie ist [x,y])
           const lines = list.map((p: any) => {
             const y = Number(p?.value?.[1] ?? p?.data?.[1] ?? p?.value ?? 0);
-            return `${p.marker ?? ""}${p.seriesName}: ${y.toFixed(1)}`; // speed: 1 Nachkommastelle
+            return `${p.marker ?? ""}${p.seriesName}: ${y.toFixed(2)}`;  // ✅ 3) HIER
           });
 
           // erst Werte, dann X
@@ -292,8 +292,8 @@ function FlightDetailsRoute() {
           name: "Vario up",
           type: "bar",
           data: chartData.vUp,
-          large: false,            // ✅ wichtig
-          progressive: 0,          // ✅ verhindert “Optimierungs”-Pfade
+          large: false,        // ✅ 1) HIER
+          progressive: 0,     // ✅ 1) HIER
           markLine: {
             symbol: ["none", "none"],
             lineStyle: { type: "dashed", opacity: 0.6 },
@@ -303,7 +303,7 @@ function FlightDetailsRoute() {
             color: (p: any) => {
               const y = p.value?.[1];
               if (y == null) return "rgba(0,0,0,0)";
-              return varioColor(y); // ✅ grün Verlauf
+              return varioColor(y);
             },
           },
         },
@@ -311,13 +311,13 @@ function FlightDetailsRoute() {
           name: "Vario down",
           type: "bar",
           data: chartData.vDown,
-          large: false,            // ✅ wichtig
-          progressive: 0,
+          large: false,       // ✅ 1) HIER
+          progressive: 0,    // ✅ 1) HIER
           itemStyle: {
             color: (p: any) => {
               const y = p.value?.[1];
               if (y == null) return "rgba(0,0,0,0)";
-              return varioColor(y); // ✅ rot Verlauf
+              return varioColor(y);
             },
           },
         },
@@ -522,17 +522,20 @@ function FlightDetailsRoute() {
     <Box p="md">
       <Stack gap="sm">
         <Group justify="space-between">
-          <Title order={3}>Flight details</Title>
+          <span>
+            <Title order={3}>Flight details</Title>
+            {flight?.igcContent && (
+              <Text size="xs" c="dimmed">
+                IGC length: {flight.igcContent.length}
+              </Text>
+            )}
+          </span>
           <Button variant="light" onClick={() => window.history.back()}>
             Back
           </Button>
         </Group>
 
-        {flight?.igcContent && (
-          <Text size="xs" c="dimmed">
-            IGC length: {flight.igcContent.length}
-          </Text>
-        )}
+
 
         {busy && <Text c="dimmed">Loading...</Text>}
 
@@ -546,18 +549,7 @@ function FlightDetailsRoute() {
 
         {flight && (
           <>
-            <Stack gap={4}>
-              <Text size="sm">
-                <b>ID:</b> {flight.id} &nbsp; <b>Date:</b> {flight.flightDate ?? "-"}
-              </Text>
-              <Text size="sm">
-                <b>Pilot:</b> {flight.pilotName ?? "-"} &nbsp; <b>Glider:</b>{" "}
-                {flight.gliderType ?? "-"}
-              </Text>
-              <Text size="sm">
-                <b>Filename:</b> {flight.originalFilename ?? "-"}
-              </Text>
-            </Stack>
+
 
             {!computed || !chartData ? (
               <Text c="dimmed" size="sm">

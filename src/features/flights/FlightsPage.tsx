@@ -18,6 +18,7 @@ import { flightApi } from "./flights.api";
 import { modals } from "@mantine/modals";
 import { calculateFlightMetrics, type FlightMetrics } from "./igc";
 import { Outlet } from "@tanstack/react-router";
+import { useFlightsStore } from "./store/flights.store";
 
 function getErrorMessage(err: unknown, fallback: string) {
     if (err instanceof Error && err.message) {
@@ -29,26 +30,27 @@ function getErrorMessage(err: unknown, fallback: string) {
 export function FlightsPage() {
     const token = useAuthStore((s) => s.token);
 
-    const [rows, setRows] = React.useState<FlightRecordDetails[]>([]);
-    const [loading, setLoading] = React.useState(false);
+
+    const flights = useFlightsStore((s) => s.flights);
+    const status = useFlightsStore((s) => s.status);
+    const loadFlights = useFlightsStore((s) => s.load);
+
+    const loading = status === "loading";
+
     const [uploading, setUploading] = React.useState(false);
-    const [error, setError] = React.useState<string | null>(null);
-
     const [deletingAll, setDeletingAll] = React.useState(false);
-
     const [deletingId, setDeletingId] = React.useState<number | null>(null);
-
 
     const [metricsBusy, setMetricsBusy] = React.useState(false);
     const [metricsError, setMetricsError] = React.useState<string | null>(null);
     const [selectedMetrics, setSelectedMetrics] = React.useState<FlightMetrics | null>(null);
 
-
+    const [error, setError] = React.useState<string | null>(null);
 
     const dateRange = React.useMemo(() => {
-        if (rows.length === 0) return null;
+        if (flights.length === 0) return null;
 
-        const dates = rows
+        const dates = flights
             .map((r) => new Date(r.flightDate!))
             .filter((d) => !isNaN(d.getTime()));
 
@@ -58,7 +60,7 @@ export function FlightsPage() {
         const max = new Date(Math.max(...dates.map((d) => d.getTime())));
 
         return { min, max };
-    }, [rows]);
+    }, [flights]);
 
     const confirmDeleteFlight = async (id: number, originalFilename?: string | null) => {
         modals.openConfirmModal({
@@ -83,7 +85,7 @@ export function FlightsPage() {
 
         try {
             await flightApi.remove(id, token);
-            await load();
+            await loadFlights(token, { force: true });
         } catch (e) {
             setError(getErrorMessage(e, 'Failed to delete flight'));
         } finally {
@@ -117,23 +119,11 @@ export function FlightsPage() {
         }, [token]
     )
 
-    const load = React.useCallback(async () => {
-        if (!token) return;
-        setLoading(true);
-        setError(null);
-        try {
-            const data = await flightApi.list(token);
-            setRows(data);
-        } catch (e: unknown) {
-            setError(getErrorMessage(e, "Failed to load flights"));
-        } finally {
-            setLoading(false);
-        }
-    }, [token]);
-
     React.useEffect(() => {
-        load();
-    }, [load]);
+        if (!token) return;
+
+        void loadFlights(token);
+    }, [token, loadFlights]);
 
     async function uploadMany(files: File[]) {
         if (!files || files.length === 0) {
@@ -148,11 +138,10 @@ export function FlightsPage() {
 
 
         try {
-            const uploadedFlights = await flightApi.uploadMany(files, token);
+            await flightApi.uploadMany(files, token);
 
+            await loadFlights(token);
 
-            // simplest UX: prepend new item
-            setRows((prev) => [...uploadedFlights.inserted, ...prev]);
         } catch (e: unknown) {
             setError(getErrorMessage(e, "Upload failed"));
         } finally {
@@ -172,7 +161,7 @@ export function FlightsPage() {
 
         try {
             await flightApi.deleteAll(token);
-            await load();
+            await loadFlights(token);
 
         } catch (e: unknown) {
             setError(getErrorMessage(e, "Delete all failed"));
@@ -190,6 +179,7 @@ export function FlightsPage() {
     }
 
     const busy = loading || uploading || deletingAll;
+
     const actionsDisabled = loading || uploading || deletingAll;
 
     return (
@@ -198,7 +188,7 @@ export function FlightsPage() {
                 <LoadingOverlay visible={busy} zIndex={1000} overlayProps={{ radius: "md", blur: 1 }} />
                 <Group justify="space-between" align="center">
                     <div>
-                        <Title order={2}>Flights {rows.length}
+                        <Title order={2}>Flights {flights.length}
                             {dateRange && (
                                 <Text span c="dimmed" size="sm" ml="sm">
                                     ({dateRange.min.toLocaleDateString()} – {dateRange.max.toLocaleDateString()})
@@ -211,7 +201,7 @@ export function FlightsPage() {
                     </div>
 
                     <Group>
-                        <Button variant="light" onClick={load} disabled={actionsDisabled}>
+                        <Button variant="light" onClick={() => token && loadFlights(token, { force: true })} disabled={actionsDisabled}>
                             Refresh
                         </Button>
 
@@ -251,7 +241,7 @@ export function FlightsPage() {
                     </Group>
                 ) : (
                     <FlightsTable
-                        flights={rows}
+                        flights={flights}
                         deletingId={deletingId}
                         onDelete={confirmDeleteFlight}
                         onOpenDetails={onOpenDetails}
@@ -262,6 +252,6 @@ export function FlightsPage() {
                 )}
             </Stack>
             <Outlet />
-        </div>
+        </div >
     );
 }
