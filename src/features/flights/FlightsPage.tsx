@@ -16,6 +16,8 @@ import type { FlightRecordDetails } from "./flights.types";
 import { useAuthStore } from "../auth/store/auth.store";
 import { flightApi } from "./flights.api";
 import { modals } from "@mantine/modals";
+import { calculateFlightMetrics, type FlightMetrics } from "./igc";
+import { Outlet } from "@tanstack/react-router";
 
 function getErrorMessage(err: unknown, fallback: string) {
     if (err instanceof Error && err.message) {
@@ -37,11 +39,17 @@ export function FlightsPage() {
     const [deletingId, setDeletingId] = React.useState<number | null>(null);
 
 
+    const [metricsBusy, setMetricsBusy] = React.useState(false);
+    const [metricsError, setMetricsError] = React.useState<string | null>(null);
+    const [selectedMetrics, setSelectedMetrics] = React.useState<FlightMetrics | null>(null);
+
+
+
     const dateRange = React.useMemo(() => {
         if (rows.length === 0) return null;
 
         const dates = rows
-            .map((r) => new Date(r.flightDate))
+            .map((r) => new Date(r.flightDate!))
             .filter((d) => !isNaN(d.getTime()));
 
         if (dates.length === 0) return null;
@@ -52,7 +60,7 @@ export function FlightsPage() {
         return { min, max };
     }, [rows]);
 
-    const confirmDeleteFlight = async (id: number, originalFilename?: string) => {
+    const confirmDeleteFlight = async (id: number, originalFilename?: string | null) => {
         modals.openConfirmModal({
             title: "Flight löschen?",
             children: (
@@ -82,6 +90,32 @@ export function FlightsPage() {
             setDeletingId(null);
         }
     }
+
+    const onOpenDetails = React.useCallback(
+        async (flight: FlightRecordDetails) => {
+
+            setMetricsError(null);
+            setSelectedMetrics(null);
+            setMetricsBusy(true);
+
+            if (!token) {
+                setMetricsError("Not authenticated");
+                return;
+            }
+            try {
+                const igcText = await flightApi.getIgcContent(flight.id, token!);
+                const metrics = calculateFlightMetrics(igcText);
+
+                setSelectedMetrics(metrics);
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            } catch (e: any) {
+                setMetricsError(e?.message ?? "Failed to calculate metrics");
+            } finally {
+                setMetricsBusy(false);
+            }
+
+        }, [token]
+    )
 
     const load = React.useCallback(async () => {
         if (!token) return;
@@ -159,69 +193,75 @@ export function FlightsPage() {
     const actionsDisabled = loading || uploading || deletingAll;
 
     return (
-        <Stack gap="md">
-            <LoadingOverlay visible={busy} zIndex={1000} overlayProps={{ radius: "md", blur: 1 }} />
-            <Group justify="space-between" align="center">
-                <div>
-                    <Title order={2}>Flights {rows.length}
-                        {dateRange && (
-                            <Text span c="dimmed" size="sm" ml="sm">
-                                ({dateRange.min.toLocaleDateString()} – {dateRange.max.toLocaleDateString()})
-                            </Text>
-                        )}
-                    </Title>
-                    <Text c="dimmed" size="sm">
-                        Upload IGC and manage metadata
-                    </Text>
-                </div>
+        <div>
+            <Stack gap="md">
+                <LoadingOverlay visible={busy} zIndex={1000} overlayProps={{ radius: "md", blur: 1 }} />
+                <Group justify="space-between" align="center">
+                    <div>
+                        <Title order={2}>Flights {rows.length}
+                            {dateRange && (
+                                <Text span c="dimmed" size="sm" ml="sm">
+                                    ({dateRange.min.toLocaleDateString()} – {dateRange.max.toLocaleDateString()})
+                                </Text>
+                            )}
+                        </Title>
+                        <Text c="dimmed" size="sm">
+                            Upload IGC and manage metadata
+                        </Text>
+                    </div>
 
-                <Group>
-                    <Button variant="light" onClick={load} disabled={actionsDisabled}>
-                        Refresh
-                    </Button>
+                    <Group>
+                        <Button variant="light" onClick={load} disabled={actionsDisabled}>
+                            Refresh
+                        </Button>
 
-                    <Button
-                        color="red"
-                        variant="light"
-                        onClick={deleteAll}
-                        disabled={actionsDisabled}
-                    >
-                        Delete all
-                    </Button>
+                        <Button
+                            color="red"
+                            variant="light"
+                            onClick={deleteAll}
+                            disabled={actionsDisabled}
+                        >
+                            Delete all
+                        </Button>
 
-                    <FileButton multiple onChange={(files) => uploadMany(files ?? [])} accept=".igc">
-                        {(props) => (
-                            <Button
-                                {...props}
-                                leftSection={<IconUpload size={16} />}
-                                loading={uploading}
-                                disabled={actionsDisabled}
-                            >
-                                Upload IGC
-                            </Button>
-                        )}
-                    </FileButton>
+                        <FileButton multiple onChange={(files) => uploadMany(files ?? [])} accept=".igc">
+                            {(props) => (
+                                <Button
+                                    {...props}
+                                    leftSection={<IconUpload size={16} />}
+                                    loading={uploading}
+                                    disabled={actionsDisabled}
+                                >
+                                    Upload IGC
+                                </Button>
+                            )}
+                        </FileButton>
+                    </Group>
                 </Group>
-            </Group>
 
-            {error && (
-                <Alert icon={<IconAlertCircle size={16} />} title="Error" color="red">
-                    {error}
-                </Alert>
-            )}
+                {error && (
+                    <Alert icon={<IconAlertCircle size={16} />} title="Error" color="red">
+                        {error}
+                    </Alert>
+                )}
 
-            {loading ? (
-                <Group justify="center" py="xl">
-                    <Loader />
-                </Group>
-            ) : (
-                <FlightsTable
-                    flights={rows}
-                    deletingId={deletingId}
-                    onDelete={confirmDeleteFlight}
-
-                />
-            )}
-        </Stack>
+                {loading ? (
+                    <Group justify="center" py="xl">
+                        <Loader />
+                    </Group>
+                ) : (
+                    <FlightsTable
+                        flights={rows}
+                        deletingId={deletingId}
+                        onDelete={confirmDeleteFlight}
+                        onOpenDetails={onOpenDetails}
+                        selectedMetrics={selectedMetrics}
+                        metricsBusy={metricsBusy}
+                        metricsError={metricsError}
+                    />
+                )}
+            </Stack>
+            <Outlet />
+        </div>
     );
 }

@@ -1,6 +1,9 @@
-import { createFileRoute } from "@tanstack/react-router";
-import { FlightsPage } from "../features/flights/FlightsPage";
+import { createFileRoute, Outlet } from "@tanstack/react-router";
 
-export const Route = createFileRoute('/flights')({
-    component: FlightsPage
-})
+export const Route = createFileRoute("/flights")({
+    component: FlightsLayout,
+});
+
+function FlightsLayout() {
+    return <Outlet />; // <-- DAS ist die entscheidende Zeile
+}

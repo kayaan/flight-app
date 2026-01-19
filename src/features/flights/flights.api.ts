@@ -11,6 +11,12 @@ export type Flight = {
 
 export const flightApi = {
 
+    getIgcContent(id: number, token: string): Promise<string> {
+        return request<string>(
+            `/api/flights/${id}/igc`,
+            { method: "GET", token })
+    },
+
     list(token: string): Promise<FlightRecordDetails[]> {
         return request<FlightRecordDetails[]>(
             '/api/flights',
@@ -18,7 +24,7 @@ export const flightApi = {
 
     },
 
-    get(id: number, token: string): Promise<FlightRecordDetails> {
+    getFlightById(id: number, token: string): Promise<FlightRecordDetails> {
         return request<FlightRecordDetails>(
             `/api/flights/${id}`,
             { method: "GET", token })

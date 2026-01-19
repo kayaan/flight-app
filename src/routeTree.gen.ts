@@ -14,6 +14,8 @@ import { Route as LoginRouteImport } from './routes/login'
 import { Route as FlightsRouteImport } from './routes/flights'
 import { Route as AboutRouteImport } from './routes/about'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as FlightsIndexRouteImport } from './routes/flights.index'
+import { Route as FlightsIdRouteImport } from './routes/flights.$id'
 
 const PersonalRoute = PersonalRouteImport.update({
   id: '/personal',
@@ -40,41 +42,71 @@ const IndexRoute = IndexRouteImport.update({
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const FlightsIndexRoute = FlightsIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => FlightsRoute,
+} as any)
+const FlightsIdRoute = FlightsIdRouteImport.update({
+  id: '/$id',
+  path: '/$id',
+  getParentRoute: () => FlightsRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/about': typeof AboutRoute
-  '/flights': typeof FlightsRoute
+  '/flights': typeof FlightsRouteWithChildren
   '/login': typeof LoginRoute
   '/personal': typeof PersonalRoute
+  '/flights/$id': typeof FlightsIdRoute
+  '/flights/': typeof FlightsIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/about': typeof AboutRoute
-  '/flights': typeof FlightsRoute
   '/login': typeof LoginRoute
   '/personal': typeof PersonalRoute
+  '/flights/$id': typeof FlightsIdRoute
+  '/flights': typeof FlightsIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/about': typeof AboutRoute
-  '/flights': typeof FlightsRoute
+  '/flights': typeof FlightsRouteWithChildren
   '/login': typeof LoginRoute
   '/personal': typeof PersonalRoute
+  '/flights/$id': typeof FlightsIdRoute
+  '/flights/': typeof FlightsIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/about' | '/flights' | '/login' | '/personal'
+  fullPaths:
+    | '/'
+    | '/about'
+    | '/flights'
+    | '/login'
+    | '/personal'
+    | '/flights/$id'
+    | '/flights/'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/about' | '/flights' | '/login' | '/personal'
-  id: '__root__' | '/' | '/about' | '/flights' | '/login' | '/personal'
+  to: '/' | '/about' | '/login' | '/personal' | '/flights/$id' | '/flights'
+  id:
+    | '__root__'
+    | '/'
+    | '/about'
+    | '/flights'
+    | '/login'
+    | '/personal'
+    | '/flights/$id'
+    | '/flights/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AboutRoute: typeof AboutRoute
-  FlightsRoute: typeof FlightsRoute
+  FlightsRoute: typeof FlightsRouteWithChildren
   LoginRoute: typeof LoginRoute
   PersonalRoute: typeof PersonalRoute
 }
@@ -116,13 +148,40 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/flights/': {
+      id: '/flights/'
+      path: '/'
+      fullPath: '/flights/'
+      preLoaderRoute: typeof FlightsIndexRouteImport
+      parentRoute: typeof FlightsRoute
+    }
+    '/flights/$id': {
+      id: '/flights/$id'
+      path: '/$id'
+      fullPath: '/flights/$id'
+      preLoaderRoute: typeof FlightsIdRouteImport
+      parentRoute: typeof FlightsRoute
+    }
   }
 }
+
+interface FlightsRouteChildren {
+  FlightsIdRoute: typeof FlightsIdRoute
+  FlightsIndexRoute: typeof FlightsIndexRoute
+}
+
+const FlightsRouteChildren: FlightsRouteChildren = {
+  FlightsIdRoute: FlightsIdRoute,
+  FlightsIndexRoute: FlightsIndexRoute,
+}
+
+const FlightsRouteWithChildren =
+  FlightsRoute._addFileChildren(FlightsRouteChildren)
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AboutRoute: AboutRoute,
-  FlightsRoute: FlightsRoute,
+  FlightsRoute: FlightsRouteWithChildren,
   LoginRoute: LoginRoute,
   PersonalRoute: PersonalRoute,
 }
