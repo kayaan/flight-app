@@ -11,12 +11,10 @@ import {
     LoadingOverlay,
 } from "@mantine/core";
 import { IconAlertCircle, IconUpload } from "@tabler/icons-react";
-import { FlightsTable } from "./FlightsTable"; // <- from my previous file
-import type { FlightRecordDetails } from "./flights.types";
+import { FlightsTableFast as FlightsTable } from "./FlightsTableFast";// <- from my previous file
 import { useAuthStore } from "../auth/store/auth.store";
 import { flightApi } from "./flights.api";
 import { modals } from "@mantine/modals";
-import { calculateFlightMetrics, type FlightMetrics } from "./igc";
 import { Outlet } from "@tanstack/react-router";
 import { useFlightsStore } from "./store/flights.store";
 
@@ -40,10 +38,6 @@ export function FlightsPage() {
     const [uploading, setUploading] = React.useState(false);
     const [deletingAll, setDeletingAll] = React.useState(false);
     const [deletingId, setDeletingId] = React.useState<number | null>(null);
-
-    const [metricsBusy, setMetricsBusy] = React.useState(false);
-    const [metricsError, setMetricsError] = React.useState<string | null>(null);
-    const [selectedMetrics, setSelectedMetrics] = React.useState<FlightMetrics | null>(null);
 
     const [error, setError] = React.useState<string | null>(null);
 
@@ -93,31 +87,6 @@ export function FlightsPage() {
         }
     }
 
-    const onOpenDetails = React.useCallback(
-        async (flight: FlightRecordDetails) => {
-
-            setMetricsError(null);
-            setSelectedMetrics(null);
-            setMetricsBusy(true);
-
-            if (!token) {
-                setMetricsError("Not authenticated");
-                return;
-            }
-            try {
-                const igcText = await flightApi.getIgcContent(flight.id, token!);
-                const metrics = calculateFlightMetrics(igcText);
-
-                setSelectedMetrics(metrics);
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            } catch (e: any) {
-                setMetricsError(e?.message ?? "Failed to calculate metrics");
-            } finally {
-                setMetricsBusy(false);
-            }
-
-        }, [token]
-    )
 
     React.useEffect(() => {
         if (!token) return;
@@ -244,10 +213,6 @@ export function FlightsPage() {
                         flights={flights}
                         deletingId={deletingId}
                         onDelete={confirmDeleteFlight}
-                        onOpenDetails={onOpenDetails}
-                        selectedMetrics={selectedMetrics}
-                        metricsBusy={metricsBusy}
-                        metricsError={metricsError}
                     />
                 )}
             </Stack>

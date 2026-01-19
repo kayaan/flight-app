@@ -20,6 +20,7 @@
     "@mantine/modals": "^8.3.12",
     "@tabler/icons-react": "^3.36.1",
     "@tanstack/react-router": "^1.141.6",
+    "@tanstack/react-virtual": "^3.13.18",
     "@tanstack/router-devtools": "^1.140.1",
     "echarts": "^6.0.0",
     "echarts-for-react": "^3.0.5",
