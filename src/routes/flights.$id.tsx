@@ -15,11 +15,17 @@ import type { EChartsReact as EChartsReactType } from "echarts-for-react";
 import EChartsReact from "echarts-for-react";
 
 import type { FlightRecordDetails } from "../features/flights/flights.types";
-import { buildFlightSeries, calculationWindow, parseIgcFixes } from "../features/flights/igc/igc.series";
+import {
+  buildFlightSeries,
+  calculationWindow,
+  parseIgcFixes,
+} from "../features/flights/igc/igc.series";
 import { useAuthStore } from "../features/auth/store/auth.store";
 import { flightApi } from "../features/flights/flights.api";
 
-import * as echarts from "echarts"
+import * as echarts from "echarts";
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
 
 export const Route = createFileRoute("/flights/$id")({
   component: FlightDetailsRoute,
@@ -33,9 +39,40 @@ function fmtTime(sec: number) {
   if (hh > 0) return `${hh}:${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}`;
   return `${mm}:${String(ss).padStart(2, "0")}`;
 }
+function clamp01(x: number) {
+  return Math.max(0, Math.min(1, x));
+}
 
-function clamp(n: number, min: number, max: number) {
-  return Math.max(min, Math.min(max, n));
+function varioColor(v: number) {
+  const max = 7;
+  const t = clamp01(Math.abs(v) / max); // 0..1
+
+  const hue = v >= 0 ? 120 : 0;         // grün / rot
+  const sat = 35 + t * 45;              // 35% -> 80%
+  const light = 78 - t * 45;            // 78% -> 33%
+
+  return `hsl(${hue}, ${sat}%, ${light}%)`;
+}
+
+function safeClosestIndex(points: [number, number][], x: number) {
+  if (!points.length) return 0;
+  if (x <= points[0][0]) return 0;
+  const last = points.length - 1;
+  if (x >= points[last][0]) return last;
+
+  let lo = 0;
+  let hi = last;
+
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (points[mid][0] < x) lo = mid + 1;
+    else hi = mid;
+  }
+
+  const i1 = lo;
+  const i0 = lo - 1;
+
+  return Math.abs(points[i0][0] - x) <= Math.abs(points[i1][0] - x) ? i0 : i1;
 }
 
 function FlightDetailsRoute() {
@@ -48,13 +85,16 @@ function FlightDetailsRoute() {
 
   const [windowSec] = React.useState(calculationWindow);
 
-  // ✅ Sync toggle
+  // ✅ Sync toggle (Zoom + Tooltip sync)
   const [syncZoom, setSyncZoom] = React.useState(true);
 
   // ✅ Chart refs
   const altRef = React.useRef<EChartsReactType | null>(null);
   const varioRef = React.useRef<EChartsReactType | null>(null);
   const speedRef = React.useRef<EChartsReactType | null>(null);
+
+  // ✅ Prevent recursion / event loops
+  const syncingRef = React.useRef(false);
 
   const computed = React.useMemo(() => {
     if (!flight?.igcContent || !flight.flightDate) return null;
@@ -64,29 +104,6 @@ function FlightDetailsRoute() {
 
     return { fixesCount: fixes.length, series, windows };
   }, [flight?.igcContent, flight?.flightDate, windowSec]);
-
-
-  const GROUP_ID = "flight-sync"
-
-  React.useEffect(() => {
-    const a = altRef.current?.getEchartsInstance()
-    const b = varioRef.current?.getEchartsInstance()
-    const c = speedRef.current?.getEchartsInstance()
-    if (!a || !b || !c) return
-
-    if (syncZoom) {
-      a.group = GROUP_ID
-      b.group = GROUP_ID
-      c.group = GROUP_ID
-      echarts.connect(GROUP_ID)
-    } else {
-      // optional: sauber trennen
-      echarts.disconnect(GROUP_ID)
-      a.group = undefined as any
-      b.group = undefined as any
-      c.group = undefined as any
-    }
-  }, [syncZoom])
 
   React.useEffect(() => {
     let cancelled = false;
@@ -123,14 +140,27 @@ function FlightDetailsRoute() {
 
     const alt = computed.series.map((p) => [p.tSec, p.altitudeM] as [number, number]);
     const hSpeed = computed.series.map((p) => [p.tSec, p.gSpeedKmh] as [number, number]);
+
     const vSpeed = computed.windows.map((p) => [p.tSec, p.vSpeedMs] as [number, number]);
+    const vUp = computed.windows.map((p) => [p.tSec, p.vSpeedMs >= 0 ? p.vSpeedMs : null] as [number, number | null]);
+    const vDown = computed.windows.map((p) => [p.tSec, p.vSpeedMs < 0 ? p.vSpeedMs : null] as [number, number | null]);
 
     const maxTSeries = computed.series.length ? computed.series[computed.series.length - 1].tSec : 0;
     const maxTWindows = computed.windows.length ? computed.windows[computed.windows.length - 1].tSec : 0;
     const maxT = Math.max(maxTSeries, maxTWindows);
 
-    return { alt, hSpeed, vSpeed, maxT };
+    return { alt, hSpeed, vSpeed, vUp, vDown, maxT };
   }, [computed]);
+
+
+  const timeMarker = `<span style="
+            display:inline-block;
+            margin-right:6px;
+            border-radius:50%;
+            width:10px;
+            height:10px;
+            background-color:#999;
+          "></span>`;
 
   // ---- Options ----
   const altOption = React.useMemo(() => {
@@ -141,11 +171,26 @@ function FlightDetailsRoute() {
       tooltip: {
         trigger: "axis",
         axisPointer: { type: "cross" },
-        valueFormatter: (v: unknown) => (typeof v === "number" ? v.toFixed(0) : String(v)),
+        valueFormatter: (v: unknown) =>
+          typeof v === "number" ? v.toFixed(0) : String(v),
+        formatter: (params: any) => {
+          const list = Array.isArray(params) ? params : [params];
+          const p0 = list[0];
+
+          // X: Sekunden als ganze Zahl
+          const xSec = Math.round(Number(p0?.value?.[0] ?? p0?.axisValue ?? 0));
+
+          // Y: zuerst der Wert (deine Serie ist [x,y])
+          const lines = list.map((p: any) => {
+            const y = Number(p?.value?.[1] ?? p?.data?.[1] ?? p?.value ?? 0);
+            return `${p.marker ?? ""}${p.seriesName}: ${Math.round(y)}`;
+          });
+
+          // erst Werte, dann X
+          return `${lines.join("<br/>")}<br/>${timeMarker}t: ${xSec}s`;
+        },
       },
-      axisPointer: {
-        link: [{ xAxisIndex: "all" }], // wichtig
-      },
+      axisPointer: { snap: true },
       xAxis: {
         type: "value",
         min: 0,
@@ -158,7 +203,6 @@ function FlightDetailsRoute() {
         axisLabel: { formatter: (v: number) => String(Math.round(v)) },
         scale: true,
       },
-      // Zoom only meaningful on first chart; we still define it so we can dispatch actions
       dataZoom: [
         {
           type: "inside",
@@ -185,37 +229,59 @@ function FlightDetailsRoute() {
         },
       ],
     };
-  }, [chartData]);
+  }, [chartData, timeMarker]);
 
   const varioOption = React.useMemo(() => {
     if (!chartData) return {};
     return {
+
       animation: false,
       grid: { left: 56, right: 16, top: 24, bottom: 24 },
       tooltip: {
         trigger: "axis",
         axisPointer: { type: "cross" },
         valueFormatter: (v: unknown) => (typeof v === "number" ? v.toFixed(2) : String(v)),
+
+        // ✅ WICHTIG: Tooltip NICHT an Maus koppeln (sonst hide bei mouseout)
+        triggerOn: "none",
+
+        // ✅ WICHTIG: Tooltip bleibt stehen, bis wir ihn selbst hideTippen
+        alwaysShowContent: true,
+        formatter: (params: any) => {
+          const list = Array.isArray(params) ? params : [params];
+          const p0 = list[0];
+
+          // X: Sekunden als ganze Zahl
+          const xSec = Math.round(Number(p0?.value?.[0] ?? p0?.axisValue ?? 0));
+
+          // Y: zuerst der Wert (deine Serie ist [x,y])
+          const lines = list.map((p: any) => {
+            const y = Number(p?.value?.[1] ?? p?.data?.[1] ?? p?.value ?? 0);
+            return `${p.marker ?? ""}${p.seriesName}: ${y.toFixed(1)}`; // speed: 1 Nachkommastelle
+          });
+
+          // erst Werte, dann X
+          return `${lines.join("<br/>")}<br/>${timeMarker}${xSec}s`;
+        },
       },
-      axisPointer: {
-        link: [{ xAxisIndex: "all" }], // wichtig
-      },
+      axisPointer: { snap: true },
       xAxis: {
         type: "value",
         min: 0,
         max: chartData.maxT,
         axisLabel: { formatter: (v: number) => fmtTime(v) },
+        axisPointer: { show: true },
       },
       yAxis: {
         type: "value",
         name: "m/s",
         scale: true,
       },
-      // If syncZoom is ON: we disable interaction here and let chart 1 drive it.
       dataZoom: [
         {
           type: "inside",
           xAxisIndex: 0,
+          // Wenn sync an: Interaktion hier aus, Alt treibt Zoom
           zoomOnMouseWheel: !syncZoom,
           moveOnMouseMove: !syncZoom,
           moveOnMouseWheel: !syncZoom,
@@ -223,15 +289,46 @@ function FlightDetailsRoute() {
       ],
       series: [
         {
-          name: "Vario",
+          name: "Vario up",
           type: "bar",
-          data: chartData.vSpeed,
-          large: true,
-          markLine: { data: [{ yAxis: 0 }] },
+          data: chartData.vUp,
+          large: false,            // ✅ wichtig
+          progressive: 0,          // ✅ verhindert “Optimierungs”-Pfade
+          markLine: {
+            symbol: ["none", "none"],
+            lineStyle: { type: "dashed", opacity: 0.6 },
+            data: [{ yAxis: 0 }],
+          },
+          itemStyle: {
+            color: (p: any) => {
+              const y = p.value?.[1];
+              if (y == null) return "rgba(0,0,0,0)";
+              return varioColor(y); // ✅ grün Verlauf
+            },
+          },
+        },
+        {
+          name: "Vario down",
+          type: "bar",
+          data: chartData.vDown,
+          large: false,            // ✅ wichtig
+          progressive: 0,
+          itemStyle: {
+            color: (p: any) => {
+              const y = p.value?.[1];
+              if (y == null) return "rgba(0,0,0,0)";
+              return varioColor(y); // ✅ rot Verlauf
+            },
+          },
         },
       ],
+      markLine: {
+        symbol: ["none", "none"],
+        lineStyle: { type: "dashed", opacity: 0.6 },
+        data: [{ yAxis: 0 }],
+      },
     };
-  }, [chartData, syncZoom]);
+  }, [chartData, syncZoom, timeMarker]);
 
   const speedOption = React.useMemo(() => {
     if (!chartData) return {};
@@ -241,16 +338,39 @@ function FlightDetailsRoute() {
       tooltip: {
         trigger: "axis",
         axisPointer: { type: "cross" },
-        valueFormatter: (v: unknown) => (typeof v === "number" ? v.toFixed(1) : String(v)),
+        valueFormatter: (v: unknown) => (typeof v === "number" ? v.toFixed(2) : String(v)),
+
+        // ✅ WICHTIG: Tooltip NICHT an Maus koppeln (sonst hide bei mouseout)
+        triggerOn: "none",
+
+        // ✅ WICHTIG: Tooltip bleibt stehen, bis wir ihn selbst hideTippen
+        alwaysShowContent: true,
+
+        formatter: (params: any) => {
+          const list = Array.isArray(params) ? params : [params];
+          const p0 = list[0];
+
+          // X: Sekunden als ganze Zahl
+          const xSec = Math.round(Number(p0?.value?.[0] ?? p0?.axisValue ?? 0));
+
+          // Y: zuerst der Wert (deine Serie ist [x,y])
+          const lines = list.map((p: any) => {
+            const y = Number(p?.value?.[1] ?? p?.data?.[1] ?? p?.value ?? 0);
+            return `${p.marker ?? ""}${p.seriesName}: ${y.toFixed(1)}`; // speed: 1 Nachkommastelle
+          });
+
+          // erst Werte, dann X
+          return `${lines.join("<br/>")}<br/>${timeMarker}${xSec}s`;
+        },
+
       },
-      axisPointer: {
-        link: [{ xAxisIndex: "all" }], // wichtig
-      },
+      axisPointer: { snap: true },
       xAxis: {
         type: "value",
         min: 0,
         max: chartData.maxT,
         axisLabel: { formatter: (v: number) => fmtTime(v) },
+        axisPointer: { show: true },
       },
       yAxis: {
         type: "value",
@@ -272,54 +392,131 @@ function FlightDetailsRoute() {
           type: "line",
           data: chartData.hSpeed,
           showSymbol: false,
-          sampling: "lttb",
           lineStyle: { width: 2 },
         },
       ],
     };
-  }, [chartData, syncZoom]);
+  }, [chartData, syncZoom, timeMarker]);
 
-  // ---- Sync zoom: chart 1 drives charts 2 + 3 ----
+  // ---- Altitude events drive (a) Zoom sync, (b) Tooltip sync ----
   const altEvents = React.useMemo(() => {
     return {
       dataZoom: () => {
         if (!syncZoom) return;
+        if (syncingRef.current) return;
 
-        const altChart = altRef.current?.getEchartsInstance();
-        const zr = altChart?.getOption()?.dataZoom;
-        if (!altChart || !zr || !Array.isArray(zr) || zr.length === 0) return;
+        const alt = altRef.current?.getEchartsInstance?.();
+        const vario = varioRef.current?.getEchartsInstance?.();
+        const speed = speedRef.current?.getEchartsInstance?.();
+        if (!alt || !vario || !speed) return;
 
-        // Prefer slider if present, fallback to inside
-        const dz = (zr.find((z: any) => z.type === "slider") ?? zr[0]) as any;
+        const dzs = alt.getOption()?.dataZoom as any[] | undefined;
+        if (!dzs?.length) return;
 
-        // ECharts may provide start/end (%) OR startValue/endValue.
-        const start = typeof dz.start === "number" ? dz.start : undefined;
-        const end = typeof dz.end === "number" ? dz.end : undefined;
-        const startValue = typeof dz.startValue === "number" ? dz.startValue : undefined;
-        const endValue = typeof dz.endValue === "number" ? dz.endValue : undefined;
+        // ✅ Slider bevorzugen (weil der verlässlich den Zustand hält)
+        const dz =
+          dzs.find((z) => z.type === "slider") ??
+          dzs.find((z) => z.type === "inside") ??
+          dzs[0];
 
-        const targets = [varioRef.current, speedRef.current]
-          .map((r) => r?.getEchartsInstance())
-          .filter(Boolean) as any[];
+        if (!dz) return;
 
-        for (const ch of targets) {
-          if (start != null && end != null) {
-            ch.dispatchAction({
-              type: "dataZoom",
-              start: clamp(start, 0, 100),
-              end: clamp(end, 0, 100),
-            });
-          } else if (startValue != null && endValue != null) {
-            ch.dispatchAction({
-              type: "dataZoom",
-              startValue,
-              endValue,
-            });
+        try {
+          syncingRef.current = true;
+
+          if (typeof dz.start === "number" && typeof dz.end === "number") {
+            for (const ch of [vario, speed]) {
+              ch.dispatchAction({
+                type: "dataZoom",
+                xAxisIndex: 0,
+                start: dz.start,
+                end: dz.end,
+              });
+            }
+          } else if (
+            typeof dz.startValue === "number" &&
+            typeof dz.endValue === "number"
+          ) {
+            for (const ch of [vario, speed]) {
+              ch.dispatchAction({
+                type: "dataZoom",
+                xAxisIndex: 0,
+                startValue: dz.startValue,
+                endValue: dz.endValue,
+              });
+            }
           }
+        } finally {
+          syncingRef.current = false;
+        }
+      },
+
+      updateAxisPointer: (e: any) => {
+        if (!syncZoom) return;
+        if (!chartData) return;
+        if (syncingRef.current) return;
+
+        const x = e?.axesInfo?.[0]?.value;
+        if (typeof x !== "number") return;
+
+        const alt = altRef.current?.getEchartsInstance?.();
+        const vario = varioRef.current?.getEchartsInstance?.();
+        const speed = speedRef.current?.getEchartsInstance?.();
+        if (!alt || !vario || !speed) return;
+
+        const iAlt = safeClosestIndex(chartData.alt, x);
+        const iSpeed = iAlt;
+
+        // ✅ Index im windows-array bestimmen
+        const iV = safeClosestIndex(chartData.vSpeed, x);
+        const vAt = chartData.vSpeed[iV]?.[1] ?? 0;
+
+        // ✅ up/down seriesIndex bestimmen
+        const varioSeriesIndex = vAt >= 0 ? 0 : 1;
+
+        try {
+          syncingRef.current = true;
+
+          alt.dispatchAction({ type: "showTip", seriesIndex: 0, dataIndex: iAlt });
+
+          // ✅ vario showTip auf die richtige Serie
+          vario.dispatchAction({
+            type: "showTip",
+            xAxisIndex: 0,
+            xAxisValue: x,
+            seriesIndex: varioSeriesIndex,
+            dataIndex: iV,
+          });
+
+          speed.dispatchAction({
+            type: "showTip",
+            xAxisIndex: 0,
+            xAxisValue: x,
+            seriesIndex: 0,
+            dataIndex: iSpeed,
+          });
+
+          // ✅ AxisPointer Linie sichtbar halten
+          vario.dispatchAction({ type: "updateAxisPointer", xAxisIndex: 0, value: x });
+          speed.dispatchAction({ type: "updateAxisPointer", xAxisIndex: 0, value: x });
+        } finally {
+          syncingRef.current = false;
+        }
+      },
+
+
+      globalout: () => {
+        if (!syncZoom) return;
+        for (const ch of [
+          altRef.current?.getEchartsInstance?.(),
+          varioRef.current?.getEchartsInstance?.(),
+          speedRef.current?.getEchartsInstance?.(),
+        ].filter(Boolean) as any[]) {
+          ch.dispatchAction({ type: "hideTip" });
         }
       },
     };
-  }, [syncZoom]);
+  }, [syncZoom, chartData]);
 
   return (
     <Box p="md">
@@ -354,7 +551,8 @@ function FlightDetailsRoute() {
                 <b>ID:</b> {flight.id} &nbsp; <b>Date:</b> {flight.flightDate ?? "-"}
               </Text>
               <Text size="sm">
-                <b>Pilot:</b> {flight.pilotName ?? "-"} &nbsp; <b>Glider:</b> {flight.gliderType ?? "-"}
+                <b>Pilot:</b> {flight.pilotName ?? "-"} &nbsp; <b>Glider:</b>{" "}
+                {flight.gliderType ?? "-"}
               </Text>
               <Text size="sm">
                 <b>Filename:</b> {flight.originalFilename ?? "-"}
@@ -369,8 +567,9 @@ function FlightDetailsRoute() {
               <>
                 <Group justify="space-between" align="center">
                   <Text size="sm">
-                    <b>Fixes:</b> {computed.fixesCount} &nbsp; <b>Series:</b> {computed.series.length} &nbsp;{" "}
-                    <b>Windows:</b> {computed.windows.length} (windowSec={windowSec})
+                    <b>Fixes:</b> {computed.fixesCount} &nbsp; <b>Series:</b>{" "}
+                    {computed.series.length} &nbsp; <b>Windows:</b>{" "}
+                    {computed.windows.length} (windowSec={windowSec})
                   </Text>
 
                   <Checkbox
@@ -391,8 +590,8 @@ function FlightDetailsRoute() {
                       option={altOption}
                       style={{ height: 320, width: "100%" }}
                       onEvents={altEvents}
-                      notMerge={true}
-                      lazyUpdate={true}
+                      notMerge
+                      lazyUpdate
                     />
                   </Box>
 
@@ -405,8 +604,8 @@ function FlightDetailsRoute() {
                       ref={varioRef as any}
                       option={varioOption}
                       style={{ height: 220, width: "100%" }}
-                      notMerge={true}
-                      lazyUpdate={true}
+                      notMerge
+                      lazyUpdate
                     />
                   </Box>
 
@@ -419,8 +618,8 @@ function FlightDetailsRoute() {
                       ref={speedRef as any}
                       option={speedOption}
                       style={{ height: 220, width: "100%" }}
-                      notMerge={true}
-                      lazyUpdate={true}
+                      notMerge
+                      lazyUpdate
                     />
                   </Box>
                 </Stack>
