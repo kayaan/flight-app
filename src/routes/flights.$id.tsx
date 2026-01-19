@@ -15,11 +15,11 @@ import type { EChartsReact as EChartsReactType } from "echarts-for-react";
 import EChartsReact from "echarts-for-react";
 
 import type { FlightRecordDetails } from "../features/flights/flights.types";
-import { buildFlightSeries, parseIgcFixes } from "../features/flights/igc/igc.series";
+import { buildFlightSeries, calculationWindow, parseIgcFixes } from "../features/flights/igc/igc.series";
 import { useAuthStore } from "../features/auth/store/auth.store";
 import { flightApi } from "../features/flights/flights.api";
 
-
+import * as echarts from "echarts"
 
 export const Route = createFileRoute("/flights/$id")({
   component: FlightDetailsRoute,
@@ -46,7 +46,7 @@ function FlightDetailsRoute() {
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
 
-  const [windowSec] = React.useState(20);
+  const [windowSec] = React.useState(calculationWindow);
 
   // ✅ Sync toggle
   const [syncZoom, setSyncZoom] = React.useState(true);
@@ -64,6 +64,29 @@ function FlightDetailsRoute() {
 
     return { fixesCount: fixes.length, series, windows };
   }, [flight?.igcContent, flight?.flightDate, windowSec]);
+
+
+  const GROUP_ID = "flight-sync"
+
+  React.useEffect(() => {
+    const a = altRef.current?.getEchartsInstance()
+    const b = varioRef.current?.getEchartsInstance()
+    const c = speedRef.current?.getEchartsInstance()
+    if (!a || !b || !c) return
+
+    if (syncZoom) {
+      a.group = GROUP_ID
+      b.group = GROUP_ID
+      c.group = GROUP_ID
+      echarts.connect(GROUP_ID)
+    } else {
+      // optional: sauber trennen
+      echarts.disconnect(GROUP_ID)
+      a.group = undefined as any
+      b.group = undefined as any
+      c.group = undefined as any
+    }
+  }, [syncZoom])
 
   React.useEffect(() => {
     let cancelled = false;
@@ -120,6 +143,9 @@ function FlightDetailsRoute() {
         axisPointer: { type: "cross" },
         valueFormatter: (v: unknown) => (typeof v === "number" ? v.toFixed(0) : String(v)),
       },
+      axisPointer: {
+        link: [{ xAxisIndex: "all" }], // wichtig
+      },
       xAxis: {
         type: "value",
         min: 0,
@@ -171,6 +197,9 @@ function FlightDetailsRoute() {
         axisPointer: { type: "cross" },
         valueFormatter: (v: unknown) => (typeof v === "number" ? v.toFixed(2) : String(v)),
       },
+      axisPointer: {
+        link: [{ xAxisIndex: "all" }], // wichtig
+      },
       xAxis: {
         type: "value",
         min: 0,
@@ -213,6 +242,9 @@ function FlightDetailsRoute() {
         trigger: "axis",
         axisPointer: { type: "cross" },
         valueFormatter: (v: unknown) => (typeof v === "number" ? v.toFixed(1) : String(v)),
+      },
+      axisPointer: {
+        link: [{ xAxisIndex: "all" }], // wichtig
       },
       xAxis: {
         type: "value",
@@ -354,6 +386,7 @@ function FlightDetailsRoute() {
                       Altitude
                     </Text>
                     <EChartsReact
+                      echarts={echarts}
                       ref={altRef as any}
                       option={altOption}
                       style={{ height: 320, width: "100%" }}
@@ -368,6 +401,7 @@ function FlightDetailsRoute() {
                       Vertical speed (Vario)
                     </Text>
                     <EChartsReact
+                      echarts={echarts}
                       ref={varioRef as any}
                       option={varioOption}
                       style={{ height: 220, width: "100%" }}
@@ -381,6 +415,7 @@ function FlightDetailsRoute() {
                       Horizontal speed
                     </Text>
                     <EChartsReact
+                      echarts={echarts}
                       ref={speedRef as any}
                       option={speedOption}
                       style={{ height: 220, width: "100%" }}

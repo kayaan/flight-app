@@ -12,6 +12,8 @@ function toRad(v: number): number {
     return (v * Math.PI) / 180;
 }
 
+export const calculationWindow = 10;
+
 /**
  * Haversine distance between two lat/lon points in kilometers.
  */
@@ -120,7 +122,7 @@ export function parseIgcFixes(
 
 export function buildFlightSeries(
     fixes: FixPoint[],
-    windowSec: number = 20
+    windowSec: number = calculationWindow
 ): {
     series: SeriesPoint[];
     windows: WindowPoint[];
