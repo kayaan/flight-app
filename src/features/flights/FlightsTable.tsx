@@ -6,7 +6,7 @@ import {
     Divider,
     Drawer,
     Group,
-    ScrollArea,
+
     Select,
     Stack,
     Table,
@@ -534,402 +534,213 @@ export function FlightsTable({
                 />
             </Group>
 
-            <Box pos="relative">
-                <LoadingOverlay visible={sortBusy} />
+            <Box style={{ width: "100%", overflowX: "auto" }}>
+                <Box style={{ minWidth: 2000 }}>
 
-                {/* Horizontal scroll */}
-                <Box style={{ overflowX: "auto", width: "100%" }}>
-                    {/* force table to be wider than viewport */}
-                    <Box style={{ minWidth: 1800 }}>
-                        <Table striped highlightOnHover withTableBorder withColumnBorders>
-                            <Table.Thead>
-                                <Table.Tr>
-                                    <Table.Th>
-                                        <Text size="sm" fw={600} style={{ whiteSpace: "nowrap" }}>
-                                            ID
+                    <Table striped highlightOnHover withTableBorder withColumnBorders>
+                        <Table.Thead>
+                            <Table.Tr>
+                                <Table.Th>
+                                    <Text size="sm" fw={600} style={{ whiteSpace: "nowrap" }}>
+                                        ID
+                                    </Text>
+                                </Table.Th>
+
+                                <Table.Th>
+                                    <SortHeader
+                                        label="Date"
+                                        active={sortKey === "flightDate"}
+                                        dir={sortDir}
+                                        onClick={() => toggleSort("flightDate")}
+                                    />
+                                </Table.Th>
+
+                                <Table.Th>
+                                    <SortHeader
+                                        label="Pilot"
+                                        active={sortKey === "pilotName"}
+                                        dir={sortDir}
+                                        onClick={() => toggleSort("pilotName")}
+                                    />
+                                </Table.Th>
+
+                                <Table.Th>
+                                    <SortHeader
+                                        label="Glider"
+                                        active={sortKey === "gliderType"}
+                                        dir={sortDir}
+                                        onClick={() => toggleSort("gliderType")}
+                                    />
+                                </Table.Th>
+
+                                <Table.Th>
+                                    <SortHeader
+                                        label="Time"
+                                        active={sortKey === "takeoffTime"}
+                                        dir={sortDir}
+                                        onClick={() => toggleSort("takeoffTime")}
+                                    />
+                                </Table.Th>
+
+                                <Table.Th>
+                                    <SortHeader
+                                        label="Duration"
+                                        active={sortKey === "durationSeconds"}
+                                        dir={sortDir}
+                                        onClick={() => toggleSort("durationSeconds")}
+                                    />
+                                </Table.Th>
+
+                                <Table.Th>
+                                    <SortHeader
+                                        label="Distance (km)"
+                                        active={sortKey === "distanceKm"}
+                                        dir={sortDir}
+                                        onClick={() => toggleSort("distanceKm")}
+                                    />
+                                </Table.Th>
+
+                                <Table.Th>
+                                    <SortHeader
+                                        label="Max alt (m)"
+                                        active={sortKey === "maxAltitudeM"}
+                                        dir={sortDir}
+                                        onClick={() => toggleSort("maxAltitudeM")}
+                                    />
+                                </Table.Th>
+
+                                <Table.Th>
+                                    <SortHeader
+                                        label="Min alt (m)"
+                                        active={sortKey === "minAltitudeM"}
+                                        dir={sortDir}
+                                        onClick={() => toggleSort("minAltitudeM")}
+                                    />
+                                </Table.Th>
+                                <Table.Th>
+                                    <SortHeader
+                                        label=" Max climb (m/s)"
+                                        active={sortKey === "maxClimbRateMs"}
+                                        dir={sortDir}
+                                        onClick={() => toggleSort("maxClimbRateMs")}
+
+                                    />
+                                </Table.Th>
+
+                                <Table.Th>
+                                    <SortHeader
+                                        label=" Max sink (m/s)"
+                                        active={sortKey === "maxSinkRateMs"}
+                                        dir={sortDir}
+                                        onClick={() => toggleSort("maxSinkRateMs")}
+
+                                    />
+                                </Table.Th>
+
+                                <Table.Th>
+                                    <SortHeader
+                                        label="Avg climb (m/s)"
+                                        active={sortKey === "avgClimbRateMs"}
+                                        dir={sortDir}
+                                        onClick={() => toggleSort("avgClimbRateMs")}
+                                    />
+                                </Table.Th>
+
+                                <Table.Th>
+                                    <SortHeader
+                                        label="Fixes"
+                                        active={sortKey === "fixCount"}
+                                        dir={sortDir}
+                                        onClick={() => toggleSort("fixCount")}
+                                    />
+                                </Table.Th>
+
+                                <Table.Th>
+                                    <SortHeader
+                                        label="Uploaded"
+                                        active={sortKey === "uploadedAt"}
+                                        dir={sortDir}
+                                        onClick={() => toggleSort("uploadedAt")}
+                                    />
+                                </Table.Th>
+
+                                <Table.Th />
+                            </Table.Tr>
+                        </Table.Thead>
+
+                        <Table.Tbody>
+                            {sorted.map((f) => (
+                                <Table.Tr key={f.id}>
+                                    <Table.Td>{f.id}</Table.Td>
+
+                                    <Table.Td>{f.flightDate ?? "-"}</Table.Td>
+                                    <Table.Td>{f.pilotName ?? "-"}</Table.Td>
+                                    <Table.Td>{f.gliderType ?? "-"}</Table.Td>
+
+
+
+
+
+                                    <Table.Td>
+                                        <TimeRangeBar takeoffTime={f.takeoffTime} landingTime={f.landingTime} />
+                                        <TimeRangeLabel takeoffIso={f.takeoffTime} landingIso={f.landingTime} />
+                                        <YearMarkerBar flightDate={f.flightDate} />
+                                    </Table.Td>
+                                    <Table.Td>{formatDuration(f.durationSeconds)}</Table.Td>
+                                    <Table.Td>{formatNum(f.distanceKm, 1)}</Table.Td>
+                                    <Table.Td>{formatInt(f.maxAltitudeM)}</Table.Td>
+                                    <Table.Td>{formatInt(f.minAltitudeM)}</Table.Td>
+                                    <Table.Td>{formatNum(f.maxClimbRateMs, 2)}</Table.Td>
+                                    <Table.Td>{formatNum(f.maxSinkRateMs, 2)}</Table.Td>
+                                    <Table.Td>{formatNum(f.avgClimbRateMs, 2)}</Table.Td>
+                                    <Table.Td>{Number.isFinite(f.fixCount as number) ? String(f.fixCount) : "-"}</Table.Td>
+
+                                    <Table.Td>
+                                        <Text size="sm" style={{ whiteSpace: "nowrap" }}>
+                                            {f._uploadedLabel}
                                         </Text>
-                                    </Table.Th>
+                                    </Table.Td>
 
-                                    <Table.Th>
-                                        <SortHeader
-                                            label="Date"
-                                            active={sortKey === "flightDate"}
-                                            dir={sortDir}
-                                            onClick={() => toggleSort("flightDate")}
-                                        />
-                                    </Table.Th>
+                                    <Table.Td>
+                                        <Group gap={6} justify="end" wrap="nowrap">
+                                            <Tooltip label="Details">
+                                                <ActionIcon
+                                                    variant="light"
+                                                    onClick={() => navigate({ to: "/flights/$id", params: { id: String(f.id) } })}
+                                                >
+                                                    <IconEye size={16} />
+                                                </ActionIcon>
+                                            </Tooltip>
 
-                                    <Table.Th>
-                                        <SortHeader
-                                            label="Pilot"
-                                            active={sortKey === "pilotName"}
-                                            dir={sortDir}
-                                            onClick={() => toggleSort("pilotName")}
-                                        />
-                                    </Table.Th>
-
-                                    <Table.Th>
-                                        <SortHeader
-                                            label="Glider"
-                                            active={sortKey === "gliderType"}
-                                            dir={sortDir}
-                                            onClick={() => toggleSort("gliderType")}
-                                        />
-                                    </Table.Th>
-
-                                    <Table.Th>
-                                        <SortHeader
-                                            label="Time"
-                                            active={sortKey === "takeoffTime"}
-                                            dir={sortDir}
-                                            onClick={() => toggleSort("takeoffTime")}
-                                        />
-                                    </Table.Th>
-
-                                    <Table.Th>
-                                        <SortHeader
-                                            label="Duration"
-                                            active={sortKey === "durationSeconds"}
-                                            dir={sortDir}
-                                            onClick={() => toggleSort("durationSeconds")}
-                                        />
-                                    </Table.Th>
-
-                                    <Table.Th>
-                                        <SortHeader
-                                            label="Distance (km)"
-                                            active={sortKey === "distanceKm"}
-                                            dir={sortDir}
-                                            onClick={() => toggleSort("distanceKm")}
-                                        />
-                                    </Table.Th>
-
-                                    <Table.Th>
-                                        <SortHeader
-                                            label="Max alt (m)"
-                                            active={sortKey === "maxAltitudeM"}
-                                            dir={sortDir}
-                                            onClick={() => toggleSort("maxAltitudeM")}
-                                        />
-                                    </Table.Th>
-
-                                    <Table.Th>
-                                        <SortHeader
-                                            label="Min alt (m)"
-                                            active={sortKey === "minAltitudeM"}
-                                            dir={sortDir}
-                                            onClick={() => toggleSort("minAltitudeM")}
-                                        />
-                                    </Table.Th>
-                                    <Table.Th>
-                                        <SortHeader
-                                            label=" Max climb (m/s)"
-                                            active={sortKey === "maxClimbRateMs"}
-                                            dir={sortDir}
-                                            onClick={() => toggleSort("maxClimbRateMs")}
-
-                                        />
-                                    </Table.Th>
-
-                                    <Table.Th>
-                                        <SortHeader
-                                            label=" Max sink (m/s)"
-                                            active={sortKey === "maxSinkRateMs"}
-                                            dir={sortDir}
-                                            onClick={() => toggleSort("maxSinkRateMs")}
-
-                                        />
-                                    </Table.Th>
-
-                                    <Table.Th>
-                                        <SortHeader
-                                            label="Avg climb (m/s)"
-                                            active={sortKey === "avgClimbRateMs"}
-                                            dir={sortDir}
-                                            onClick={() => toggleSort("avgClimbRateMs")}
-                                        />
-                                    </Table.Th>
-
-                                    <Table.Th>
-                                        <SortHeader
-                                            label="Fixes"
-                                            active={sortKey === "fixCount"}
-                                            dir={sortDir}
-                                            onClick={() => toggleSort("fixCount")}
-                                        />
-                                    </Table.Th>
-
-                                    <Table.Th>
-                                        <SortHeader
-                                            label="Uploaded"
-                                            active={sortKey === "uploadedAt"}
-                                            dir={sortDir}
-                                            onClick={() => toggleSort("uploadedAt")}
-                                        />
-                                    </Table.Th>
-
-                                    <Table.Th />
+                                            <Tooltip label="Delete flight">
+                                                <ActionIcon
+                                                    variant="light"
+                                                    color="red"
+                                                    loading={deletingId === f.id}
+                                                    disabled={deletingId !== null}
+                                                    onClick={() => onDelete(f.id, f.originalFilename)}
+                                                >
+                                                    <IconTrash size={16} />
+                                                </ActionIcon>
+                                            </Tooltip>
+                                        </Group>
+                                    </Table.Td>
                                 </Table.Tr>
-                            </Table.Thead>
+                            ))}
 
-                            <Table.Tbody>
-                                {sorted.map((f) => (
-                                    <Table.Tr key={f.id}>
-                                        <Table.Td>{f.id}</Table.Td>
-
-                                        <Table.Td>{f.flightDate ?? "-"}</Table.Td>
-                                        <Table.Td>{f.pilotName ?? "-"}</Table.Td>
-                                        <Table.Td>{f.gliderType ?? "-"}</Table.Td>
-
-
-
-
-
-                                        <Table.Td>
-                                            <TimeRangeBar takeoffTime={f.takeoffTime} landingTime={f.landingTime} />
-                                            <TimeRangeLabel takeoffIso={f.takeoffTime} landingIso={f.landingTime} />
-                                            <YearMarkerBar flightDate={f.flightDate} />
-                                        </Table.Td>
-                                        <Table.Td>{formatDuration(f.durationSeconds)}</Table.Td>
-                                        <Table.Td>{formatNum(f.distanceKm, 1)}</Table.Td>
-                                        <Table.Td>{formatInt(f.maxAltitudeM)}</Table.Td>
-                                        <Table.Td>{formatInt(f.minAltitudeM)}</Table.Td>
-                                        <Table.Td>{formatNum(f.maxClimbRateMs, 2)}</Table.Td>
-                                        <Table.Td>{formatNum(f.maxSinkRateMs, 2)}</Table.Td>
-                                        <Table.Td>{formatNum(f.avgClimbRateMs, 2)}</Table.Td>
-                                        <Table.Td>{Number.isFinite(f.fixCount as number) ? String(f.fixCount) : "-"}</Table.Td>
-
-                                        <Table.Td>
-                                            <Text size="sm" style={{ whiteSpace: "nowrap" }}>
-                                                {f._uploadedLabel}
-                                            </Text>
-                                        </Table.Td>
-
-                                        <Table.Td>
-                                            <Group gap={6} justify="end" wrap="nowrap">
-                                                <Tooltip label="Details">
-                                                    <ActionIcon
-                                                        variant="light"
-                                                        onClick={() => navigate({ to: "/flights/$id", params: { id: String(f.id) } })}
-                                                    >
-                                                        <IconEye size={16} />
-                                                    </ActionIcon>
-                                                </Tooltip>
-
-                                                <Tooltip label="Delete flight">
-                                                    <ActionIcon
-                                                        variant="light"
-                                                        color="red"
-                                                        loading={deletingId === f.id}
-                                                        disabled={deletingId !== null}
-                                                        onClick={() => onDelete(f.id, f.originalFilename)}
-                                                    >
-                                                        <IconTrash size={16} />
-                                                    </ActionIcon>
-                                                </Tooltip>
-                                            </Group>
-                                        </Table.Td>
-                                    </Table.Tr>
-                                ))}
-
-                                {sorted.length === 0 && (
-                                    <Table.Tr>
-                                        <Table.Td colSpan={TABLE_COLS}>
-                                            <Text c="dimmed" size="sm">
-                                                No flights found.
-                                            </Text>
-                                        </Table.Td>
-                                    </Table.Tr>
-                                )}
-                            </Table.Tbody>
-                        </Table>
-                    </Box>
+                            {sorted.length === 0 && (
+                                <Table.Tr>
+                                    <Table.Td colSpan={TABLE_COLS}>
+                                        <Text c="dimmed" size="sm">
+                                            No flights found.
+                                        </Text>
+                                    </Table.Td>
+                                </Table.Tr>
+                            )}
+                        </Table.Tbody>
+                    </Table>
                 </Box>
             </Box>
-
-
-            {/* Drawer can stay as-is; it already shows most fields. */}
-            < Drawer opened={opened} onClose={() => setOpened(false)
-            } title="Flight details" position="right" size="md" >
-                {
-                    selected ? (
-                        <Stack gap="sm" >
-                            <Group justify="space-between">
-                                <Text fw={700}>
-                                    #{selected.id} — {selected.flightDate ?? "-"}
-                                </Text>
-                                <Group gap="xs">
-                                    <VerifiedBadge value={selected.isVerified} />
-                                    <VisibilityBadge value={selected.visibility} />
-                                </Group>
-                            </Group>
-
-                            <Divider />
-
-                            <Stack gap={6}>
-                                <Text size="sm">
-                                    <b>Pilot:</b> {selected.pilotName ?? "-"}
-                                </Text>
-                                <Text size="sm">
-                                    <b>Glider:</b> {selected.gliderType ?? "-"}
-                                </Text>
-                                <Text size="sm">
-                                    <b>Registration:</b> {selected.gliderRegistration ?? "-"}
-                                </Text>
-                                <Text size="sm">
-                                    <b>Callsign:</b> {selected.gliderCallsign ?? "-"}
-                                </Text>
-                                <Text size="sm">
-                                    <b>Logger:</b> {selected.loggerModel ?? "-"}
-                                </Text>
-                                <Text size="sm">
-                                    <b>Filename:</b> {selected.originalFilename ?? "-"}
-                                </Text>
-                                <Text size="sm">
-                                    <b>UserId:</b> {selected.userId}
-                                </Text>
-                                <Text size="sm">
-                                    <b>Uploaded:</b> {new Date(selected.uploadedAt).toLocaleString()}
-                                </Text>
-                            </Stack>
-
-                            <Divider />
-
-                            <Stack gap={6}>
-                                <Text size="sm">
-                                    <b>Takeoff:</b> {selected.takeoffTime ?? "-"}
-                                </Text>
-                                <Text size="sm">
-                                    <b>Landing:</b> {selected.landingTime ?? "-"}
-                                </Text>
-                                <Text size="sm">
-                                    <b>Duration:</b> {formatDuration(selected.durationSeconds)}
-                                </Text>
-                                <Text size="sm">
-                                    <b>Distance:</b> {formatNum(selected.distanceKm, 1)} km
-                                </Text>
-                                <Text size="sm">
-                                    <b>Max altitude:</b> {formatInt(selected.maxAltitudeM)} m
-                                </Text>
-                                <Text size="sm">
-                                    <b>Min altitude:</b> {formatInt(selected.minAltitudeM)} m
-                                </Text>
-                                <Text size="sm">
-                                    <b>Max climb:</b> {formatNum(selected.maxClimbRateMs, 2)} m/s
-                                </Text>
-                                <Text size="sm">
-                                    <b>Max sink:</b> {formatNum(selected.maxSinkRateMs, 2)} m/s
-                                </Text>
-                                <Text size="sm">
-                                    <b>Avg climb:</b> {formatNum(selected.avgClimbRateMs, 2)} m/s
-                                </Text>
-                                <Text size="sm">
-                                    <b>Fix count:</b> {Number.isFinite(selected.fixCount as number) ? String(selected.fixCount) : "-"}
-                                </Text>
-                            </Stack>
-
-                            <Divider />
-
-                            <Box pos="relative">
-                                <LoadingOverlay visible={metricsBusy} />
-                                <Stack gap={6}>
-                                    <Text fw={600}>Metrics</Text>
-
-                                    {metricsError && (
-                                        <Text c="red" size="sm">
-                                            {metricsError}
-                                        </Text>
-                                    )}
-
-                                    {!metricsBusy && !metricsError && !selectedMetrics && (
-                                        <Text c="dimmed" size="sm">
-                                            No metrics yet.
-                                        </Text>
-                                    )}
-
-                                    {selectedMetrics && (
-                                        <Stack gap={6}>
-                                            <Text size="sm">
-                                                <b>Total distance:</b> {selectedMetrics.totalDistanceKm.toFixed(1)} km
-                                            </Text>
-                                            <Text size="sm">
-                                                <b>Max altitude (MSL):</b> {Math.round(selectedMetrics.maxAltitudeM)} m
-                                            </Text>
-                                            <Text size="sm">
-                                                <b>Min altitude:</b> {Math.round(selectedMetrics.minAltitudeM)} m
-                                            </Text>
-                                            <Text size="sm">
-                                                <b>Total gain:</b> {Math.round(selectedMetrics.totalAltitudeGainM)} m
-                                            </Text>
-                                            <Text size="sm">
-                                                <b>Max climb:</b> {selectedMetrics.maxClimbRateMs.toFixed(2)} m/s
-                                            </Text>
-                                            <Text size="sm">
-                                                <b>Max sink:</b> {selectedMetrics.maxSinkRateMs.toFixed(2)} m/s
-                                            </Text>
-                                            <Text size="sm">
-                                                <b>Start altitude:</b> {Math.round(selectedMetrics.startAltitudeM)} m
-                                            </Text>
-                                            <Text size="sm">
-                                                <b>Landing altitude:</b> {Math.round(selectedMetrics.landingAltitudeM)} m
-                                            </Text>
-                                            {"avgClimbRateMs" in (selectedMetrics as any) && (
-                                                <Text size="sm">
-                                                    <b>Avg climb:</b> {(selectedMetrics as any).avgClimbRateMs?.toFixed?.(2) ?? "-"} m/s
-                                                </Text>
-                                            )}
-                                            {"fixCount" in (selectedMetrics as any) && (
-                                                <Text size="sm">
-                                                    <b>Fix count:</b> {(selectedMetrics as any).fixCount ?? "-"}
-                                                </Text>
-                                            )}
-                                        </Stack>
-                                    )}
-                                </Stack>
-                            </Box>
-
-                            <Divider />
-
-                            <Group justify="space-between" align="end">
-                                <Stack gap={4} style={{ flex: 1 }}>
-                                    <Text size="sm" fw={600}>
-                                        File hash
-                                    </Text>
-                                    <Code block style={{ wordBreak: "break-all" }}>
-                                        {selected.fileHash}
-                                    </Code>
-                                </Stack>
-
-                                <CopyButton value={selected.fileHash}>
-                                    {({ copied, copy }) => (
-                                        <Button
-                                            variant="light"
-                                            leftSection={copied ? <IconCheck size={16} /> : <IconCopy size={16} />}
-                                            onClick={copy}
-                                        >
-                                            {copied ? "Copied" : "Copy"}
-                                        </Button>
-                                    )}
-                                </CopyButton>
-                            </Group>
-
-                            <Divider />
-
-                            <Stack gap={6}>
-                                <Text size="sm">
-                                    <b>LX activity:</b> {selected.lxActivityId ?? "-"}
-                                </Text>
-                                <Text size="sm">
-                                    <b>LX device JWT:</b> {selected.lxDeviceJwt ? "(present)" : "-"}
-                                </Text>
-                            </Stack>
-                        </Stack>
-                    ) : (
-                        <Text c="dimmed" size="sm">
-                            No selection.
-                        </Text>
-                    )}
-            </Drawer >
         </>
     );
 }
