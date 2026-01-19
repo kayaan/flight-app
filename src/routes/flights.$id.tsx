@@ -1,27 +1,60 @@
 import * as React from "react";
 import { createFileRoute } from "@tanstack/react-router";
-import { Box, Stack, Text, Title, Code, Alert, Button, Group } from "@mantine/core";
+import {
+  Box,
+  Stack,
+  Text,
+  Title,
+  Alert,
+  Button,
+  Group,
+  Checkbox,
+} from "@mantine/core";
 import { IconAlertCircle } from "@tabler/icons-react";
+import type { EChartsReact as EChartsReactType } from "echarts-for-react";
+import EChartsReact from "echarts-for-react";
+
 import type { FlightRecordDetails } from "../features/flights/flights.types";
 import { buildFlightSeries, parseIgcFixes } from "../features/flights/igc/igc.series";
 import { useAuthStore } from "../features/auth/store/auth.store";
 import { flightApi } from "../features/flights/flights.api";
 
-export const Route = createFileRoute('/flights/$id')({
-  component: FlightDetailsRoute
-})
+
+
+export const Route = createFileRoute("/flights/$id")({
+  component: FlightDetailsRoute,
+});
+
+function fmtTime(sec: number) {
+  const s = Math.max(0, Math.floor(sec));
+  const hh = Math.floor(s / 3600);
+  const mm = Math.floor((s % 3600) / 60);
+  const ss = s % 60;
+  if (hh > 0) return `${hh}:${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}`;
+  return `${mm}:${String(ss).padStart(2, "0")}`;
+}
+
+function clamp(n: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, n));
+}
 
 function FlightDetailsRoute() {
   const token = useAuthStore((s) => s.token);
-
   const { id } = Route.useParams();
 
   const [flight, setFlight] = React.useState<FlightRecordDetails | null>(null);
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
 
-  // Variable window size (default 5s) – later we connect this to a slider UI
-  const [windowSec] = React.useState(5);
+  const [windowSec] = React.useState(20);
+
+  // ✅ Sync toggle
+  const [syncZoom, setSyncZoom] = React.useState(true);
+
+  // ✅ Chart refs
+  const altRef = React.useRef<EChartsReactType | null>(null);
+  const varioRef = React.useRef<EChartsReactType | null>(null);
+  const speedRef = React.useRef<EChartsReactType | null>(null);
 
   const computed = React.useMemo(() => {
     if (!flight?.igcContent || !flight.flightDate) return null;
@@ -47,9 +80,7 @@ function FlightDetailsRoute() {
         if (!Number.isFinite(numericId)) throw new Error("Invalid flight id");
 
         const f = await flightApi.getFlightById(numericId, token);
-
         if (!cancelled) setFlight(f);
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
       } catch (e: any) {
         if (!cancelled) setError(e?.message ?? "Failed to load flight");
       } finally {
@@ -63,12 +94,207 @@ function FlightDetailsRoute() {
     };
   }, [id, token]);
 
+  // ---- Build chart data (arrays are fastest for ECharts) ----
+  const chartData = React.useMemo(() => {
+    if (!computed) return null;
+
+    const alt = computed.series.map((p) => [p.tSec, p.altitudeM] as [number, number]);
+    const hSpeed = computed.series.map((p) => [p.tSec, p.gSpeedKmh] as [number, number]);
+    const vSpeed = computed.windows.map((p) => [p.tSec, p.vSpeedMs] as [number, number]);
+
+    const maxTSeries = computed.series.length ? computed.series[computed.series.length - 1].tSec : 0;
+    const maxTWindows = computed.windows.length ? computed.windows[computed.windows.length - 1].tSec : 0;
+    const maxT = Math.max(maxTSeries, maxTWindows);
+
+    return { alt, hSpeed, vSpeed, maxT };
+  }, [computed]);
+
+  // ---- Options ----
+  const altOption = React.useMemo(() => {
+    if (!chartData) return {};
+    return {
+      animation: false,
+      grid: { left: 56, right: 16, top: 24, bottom: 40 },
+      tooltip: {
+        trigger: "axis",
+        axisPointer: { type: "cross" },
+        valueFormatter: (v: unknown) => (typeof v === "number" ? v.toFixed(0) : String(v)),
+      },
+      xAxis: {
+        type: "value",
+        min: 0,
+        max: chartData.maxT,
+        axisLabel: { formatter: (v: number) => fmtTime(v) },
+      },
+      yAxis: {
+        type: "value",
+        name: "m",
+        axisLabel: { formatter: (v: number) => String(Math.round(v)) },
+        scale: true,
+      },
+      // Zoom only meaningful on first chart; we still define it so we can dispatch actions
+      dataZoom: [
+        {
+          type: "inside",
+          xAxisIndex: 0,
+          zoomOnMouseWheel: true,
+          moveOnMouseMove: true,
+          moveOnMouseWheel: true,
+        },
+        {
+          type: "slider",
+          xAxisIndex: 0,
+          height: 20,
+          bottom: 8,
+        },
+      ],
+      series: [
+        {
+          name: "Altitude",
+          type: "line",
+          data: chartData.alt,
+          showSymbol: false,
+          sampling: "lttb",
+          lineStyle: { width: 2 },
+        },
+      ],
+    };
+  }, [chartData]);
+
+  const varioOption = React.useMemo(() => {
+    if (!chartData) return {};
+    return {
+      animation: false,
+      grid: { left: 56, right: 16, top: 24, bottom: 24 },
+      tooltip: {
+        trigger: "axis",
+        axisPointer: { type: "cross" },
+        valueFormatter: (v: unknown) => (typeof v === "number" ? v.toFixed(2) : String(v)),
+      },
+      xAxis: {
+        type: "value",
+        min: 0,
+        max: chartData.maxT,
+        axisLabel: { formatter: (v: number) => fmtTime(v) },
+      },
+      yAxis: {
+        type: "value",
+        name: "m/s",
+        scale: true,
+      },
+      // If syncZoom is ON: we disable interaction here and let chart 1 drive it.
+      dataZoom: [
+        {
+          type: "inside",
+          xAxisIndex: 0,
+          zoomOnMouseWheel: !syncZoom,
+          moveOnMouseMove: !syncZoom,
+          moveOnMouseWheel: !syncZoom,
+        },
+      ],
+      series: [
+        {
+          name: "Vario",
+          type: "bar",
+          data: chartData.vSpeed,
+          large: true,
+          markLine: { data: [{ yAxis: 0 }] },
+        },
+      ],
+    };
+  }, [chartData, syncZoom]);
+
+  const speedOption = React.useMemo(() => {
+    if (!chartData) return {};
+    return {
+      animation: false,
+      grid: { left: 56, right: 16, top: 24, bottom: 24 },
+      tooltip: {
+        trigger: "axis",
+        axisPointer: { type: "cross" },
+        valueFormatter: (v: unknown) => (typeof v === "number" ? v.toFixed(1) : String(v)),
+      },
+      xAxis: {
+        type: "value",
+        min: 0,
+        max: chartData.maxT,
+        axisLabel: { formatter: (v: number) => fmtTime(v) },
+      },
+      yAxis: {
+        type: "value",
+        name: "km/h",
+        scale: true,
+      },
+      dataZoom: [
+        {
+          type: "inside",
+          xAxisIndex: 0,
+          zoomOnMouseWheel: !syncZoom,
+          moveOnMouseMove: !syncZoom,
+          moveOnMouseWheel: !syncZoom,
+        },
+      ],
+      series: [
+        {
+          name: "Ground speed",
+          type: "line",
+          data: chartData.hSpeed,
+          showSymbol: false,
+          sampling: "lttb",
+          lineStyle: { width: 2 },
+        },
+      ],
+    };
+  }, [chartData, syncZoom]);
+
+  // ---- Sync zoom: chart 1 drives charts 2 + 3 ----
+  const altEvents = React.useMemo(() => {
+    return {
+      dataZoom: () => {
+        if (!syncZoom) return;
+
+        const altChart = altRef.current?.getEchartsInstance();
+        const zr = altChart?.getOption()?.dataZoom;
+        if (!altChart || !zr || !Array.isArray(zr) || zr.length === 0) return;
+
+        // Prefer slider if present, fallback to inside
+        const dz = (zr.find((z: any) => z.type === "slider") ?? zr[0]) as any;
+
+        // ECharts may provide start/end (%) OR startValue/endValue.
+        const start = typeof dz.start === "number" ? dz.start : undefined;
+        const end = typeof dz.end === "number" ? dz.end : undefined;
+        const startValue = typeof dz.startValue === "number" ? dz.startValue : undefined;
+        const endValue = typeof dz.endValue === "number" ? dz.endValue : undefined;
+
+        const targets = [varioRef.current, speedRef.current]
+          .map((r) => r?.getEchartsInstance())
+          .filter(Boolean) as any[];
+
+        for (const ch of targets) {
+          if (start != null && end != null) {
+            ch.dispatchAction({
+              type: "dataZoom",
+              start: clamp(start, 0, 100),
+              end: clamp(end, 0, 100),
+            });
+          } else if (startValue != null && endValue != null) {
+            ch.dispatchAction({
+              type: "dataZoom",
+              startValue,
+              endValue,
+            });
+          }
+        }
+      },
+    };
+  }, [syncZoom]);
+
   return (
     <Box p="md">
       <Stack gap="sm">
         <Group justify="space-between">
           <Title order={3}>Flight details</Title>
-          <Button variant="light" onClick={() => history.back()}>
+          <Button variant="light" onClick={() => window.history.back()}>
             Back
           </Button>
         </Group>
@@ -103,28 +329,66 @@ function FlightDetailsRoute() {
               </Text>
             </Stack>
 
-            {!computed ? (
+            {!computed || !chartData ? (
               <Text c="dimmed" size="sm">
                 Missing igcContent or flightDate.
               </Text>
             ) : (
               <>
-                <Text size="sm">
-                  <b>Fixes:</b> {computed.fixesCount} &nbsp; <b>Series points:</b> {computed.series.length} &nbsp;{" "}
-                  <b>Windows:</b> {computed.windows.length} (windowSec={windowSec})
-                </Text>
+                <Group justify="space-between" align="center">
+                  <Text size="sm">
+                    <b>Fixes:</b> {computed.fixesCount} &nbsp; <b>Series:</b> {computed.series.length} &nbsp;{" "}
+                    <b>Windows:</b> {computed.windows.length} (windowSec={windowSec})
+                  </Text>
 
-                {/* Temporary debug output: we will replace with charts next */}
-                <Code block>
-                  {JSON.stringify(
-                    {
-                      sampleSeries: computed.series.slice(0, 3),
-                      sampleWindows: computed.windows.slice(0, 3),
-                    },
-                    null,
-                    2
-                  )}
-                </Code>
+                  <Checkbox
+                    label="Sync zoom (Altitude drives others)"
+                    checked={syncZoom}
+                    onChange={(e) => setSyncZoom(e.currentTarget.checked)}
+                  />
+                </Group>
+
+                <Stack gap="xs">
+                  <Box>
+                    <Text size="sm" fw={600} mb={4}>
+                      Altitude
+                    </Text>
+                    <EChartsReact
+                      ref={altRef as any}
+                      option={altOption}
+                      style={{ height: 320, width: "100%" }}
+                      onEvents={altEvents}
+                      notMerge={true}
+                      lazyUpdate={true}
+                    />
+                  </Box>
+
+                  <Box>
+                    <Text size="sm" fw={600} mb={4}>
+                      Vertical speed (Vario)
+                    </Text>
+                    <EChartsReact
+                      ref={varioRef as any}
+                      option={varioOption}
+                      style={{ height: 220, width: "100%" }}
+                      notMerge={true}
+                      lazyUpdate={true}
+                    />
+                  </Box>
+
+                  <Box>
+                    <Text size="sm" fw={600} mb={4}>
+                      Horizontal speed
+                    </Text>
+                    <EChartsReact
+                      ref={speedRef as any}
+                      option={speedOption}
+                      style={{ height: 220, width: "100%" }}
+                      notMerge={true}
+                      lazyUpdate={true}
+                    />
+                  </Box>
+                </Stack>
               </>
             )}
           </>

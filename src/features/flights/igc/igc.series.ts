@@ -120,7 +120,7 @@ export function parseIgcFixes(
 
 export function buildFlightSeries(
     fixes: FixPoint[],
-    windowSec: number = 5
+    windowSec: number = 20
 ): {
     series: SeriesPoint[];
     windows: WindowPoint[];
