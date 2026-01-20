@@ -11,12 +11,13 @@ import {
     LoadingOverlay,
 } from "@mantine/core";
 import { IconAlertCircle, IconUpload } from "@tabler/icons-react";
-import { FlightsTableFast as FlightsTable } from "./FlightsTableFast";// <- from my previous file
-import { useAuthStore } from "../auth/store/auth.store";
 import { flightApi } from "./flights.api";
 import { modals } from "@mantine/modals";
 import { Outlet } from "@tanstack/react-router";
 import { useFlightsStore } from "./store/flights.store";
+import { useAuthStore } from "../auth/store/auth.store";
+import { FlightsTableSimpleFast } from "./FlightsTableFast";
+
 
 function getErrorMessage(err: unknown, fallback: string) {
     if (err instanceof Error && err.message) {
@@ -209,7 +210,7 @@ export function FlightsPage() {
                         <Loader />
                     </Group>
                 ) : (
-                    <FlightsTable
+                    <FlightsTableSimpleFast
                         flights={flights}
                         deletingId={deletingId}
                         onDelete={confirmDeleteFlight}

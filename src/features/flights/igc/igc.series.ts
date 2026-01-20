@@ -12,7 +12,7 @@ function toRad(v: number): number {
     return (v * Math.PI) / 180;
 }
 
-export const calculationWindow = 10;
+export const calculationWindow = 5;
 
 /**
  * Haversine distance between two lat/lon points in kilometers.
