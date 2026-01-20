@@ -73,6 +73,8 @@ function FlightDetailsRoute() {
   const token = useAuthStore((s) => s.token);
   const { id } = Route.useParams();
 
+  const [baseMap, setBaseMap] = React.useState<"osm" | "topo">("osm");
+
   const [flight, setFlight] = React.useState<FlightRecordDetails | null>(null);
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
@@ -539,7 +541,15 @@ function FlightDetailsRoute() {
             <Button leftSection={<IconX size={16} />} variant="light" onClick={() => setMapOpen(false)}>
               Map close
             </Button>
+
+
+
           )}
+          <Checkbox
+            label="Topo"
+            checked={baseMap === "topo"}
+            onChange={(e) => setBaseMap(e.currentTarget.checked ? "topo" : "osm")}
+          />
         </Group>
 
         {busy && <Text c="dimmed">Loading...</Text>}
@@ -673,7 +683,9 @@ function FlightDetailsRoute() {
 
                       {/* IMPORTANT: Map should fill remaining height */}
                       <Box style={{ flex: 1, minHeight: 0 }}>
-                        <FlightMap points={computed?.mapPoints ?? []} />
+                        <FlightMap
+                          points={computed?.mapPoints ?? []}
+                          baseMap={baseMap} />
                       </Box>
                     </Box>
                   )}
