@@ -1,33 +1,20 @@
 import * as React from "react";
 import { createFileRoute } from "@tanstack/react-router";
-import {
-  Box,
-  Stack,
-  Text,
-  Alert,
-  Button,
-  Group,
-  Checkbox,
-} from "@mantine/core";
+import { Box, Stack, Text, Alert, Button, Group, Checkbox } from "@mantine/core";
 import { IconAlertCircle } from "@tabler/icons-react";
 import type { EChartsReact as EChartsReactType } from "echarts-for-react";
 import EChartsReact from "echarts-for-react";
+import * as echarts from "echarts";
 
 import type { FlightRecordDetails } from "../features/flights/flights.types";
-import {
-  buildFlightSeries,
-  calculationWindow,
-  parseIgcFixes,
-} from "../features/flights/igc/igc.series";
+import { buildFlightSeries, calculationWindow, parseIgcFixes } from "../features/flights/igc/igc.series";
 import { useAuthStore } from "../features/auth/store/auth.store";
 import { flightApi } from "../features/flights/flights.api";
 
-import * as echarts from "echarts";
 import { FlightMap } from "../features/flights/map/FlightMapBase";
 import type { LatLngTuple } from "leaflet";
-
-import { Divider } from "@mantine/core";
 import { IconMap, IconX } from "@tabler/icons-react";
+
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 export const Route = createFileRoute("/flights/$id")({
@@ -50,9 +37,9 @@ function varioColor(v: number) {
   const max = 7;
   const t = clamp01(Math.abs(v) / max); // 0..1
 
-  const hue = v >= 0 ? 120 : 0;         // grün / rot
-  const sat = 35 + t * 45;              // 35% -> 80%
-  const light = 78 - t * 45;            // 78% -> 33%
+  const hue = v >= 0 ? 120 : 0; // grün / rot
+  const sat = 35 + t * 45; // 35% -> 80%
+  const light = 78 - t * 45; // 78% -> 33%
 
   return `hsl(${hue}, ${sat}%, ${light}%)`;
 }
@@ -78,6 +65,10 @@ function safeClosestIndex(points: [number, number][], x: number) {
   return Math.abs(points[i0][0] - x) <= Math.abs(points[i1][0] - x) ? i0 : i1;
 }
 
+function clamp(n: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, n));
+}
+
 function FlightDetailsRoute() {
   const token = useAuthStore((s) => s.token);
   const { id } = Route.useParams();
@@ -99,27 +90,26 @@ function FlightDetailsRoute() {
   // ✅ Prevent recursion / event loops
   const syncingRef = React.useRef(false);
 
-
+  // ✅ Map panel + splitter
   const [mapOpen, setMapOpen] = React.useState(false);
-
-  // Anteil links (Charts) in %, nur relevant wenn mapOpen=true
-  const [splitPct, setSplitPct] = React.useState(60);
-
+  const [splitPct, setSplitPct] = React.useState(60); // charts width %
   const containerRef = React.useRef<HTMLDivElement | null>(null);
   const draggingRef = React.useRef(false);
 
-  function clamp(n: number, min: number, max: number) {
-    return Math.min(max, Math.max(min, n));
-  }
-
-  const onDividerPointerDown = React.useCallback((e: React.PointerEvent) => {
-    if (!mapOpen) return;
-    draggingRef.current = true;
-    (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
-  }, [mapOpen]);
+  const onDividerPointerDown = React.useCallback(
+    (e: React.PointerEvent) => {
+      if (!mapOpen) return;
+      e.preventDefault();
+      draggingRef.current = true;
+      (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
+    },
+    [mapOpen]
+  );
 
   const onDividerPointerMove = React.useCallback((e: React.PointerEvent) => {
     if (!draggingRef.current) return;
+    e.preventDefault();
+
     const el = containerRef.current;
     if (!el) return;
 
@@ -127,7 +117,7 @@ function FlightDetailsRoute() {
     const x = e.clientX - rect.left;
     const pct = (x / rect.width) * 100;
 
-    // Grenzen: Charts min 40%, Map min 25%
+    // Charts min 40%, Map min 25%
     setSplitPct(clamp(pct, 40, 75));
   }, []);
 
@@ -148,10 +138,7 @@ function FlightDetailsRoute() {
     const fixes = parseIgcFixes(flight.igcContent, flight.flightDate);
     const { series, windows } = buildFlightSeries(fixes, windowSec);
 
-    // Leaflet points: [lat, lon]
     const rawPoints: LatLngTuple[] = fixes.map((f) => [f.lat, f.lon]);
-
-    // Performance: n=1 (kein sampling) oder z.B. 3/5/10
     const mapPoints = sampleEveryNth(rawPoints, 3);
 
     return { fixesCount: fixes.length, series, windows, mapPoints };
@@ -186,18 +173,17 @@ function FlightDetailsRoute() {
     };
   }, [id, token]);
 
-
+  // ✅ ECharts needs resize when layout width changes (map open/drag)
   React.useEffect(() => {
     const alt = altRef.current?.getEchartsInstance?.();
     const vario = varioRef.current?.getEchartsInstance?.();
     const speed = speedRef.current?.getEchartsInstance?.();
 
-    // kleiner delay, damit Layout fertig ist
     const t = window.setTimeout(() => {
       alt?.resize();
       vario?.resize();
       speed?.resize();
-    }, 50);
+    }, 60);
 
     return () => window.clearTimeout(t);
   }, [mapOpen, splitPct]);
@@ -210,8 +196,12 @@ function FlightDetailsRoute() {
     const hSpeed = computed.series.map((p) => [p.tSec, p.gSpeedKmh] as [number, number]);
 
     const vSpeed = computed.windows.map((p) => [p.tSec, p.vSpeedMs] as [number, number]);
-    const vUp = computed.windows.map((p) => [p.tSec, p.vSpeedMs >= 0 ? p.vSpeedMs : null] as [number, number | null]);
-    const vDown = computed.windows.map((p) => [p.tSec, p.vSpeedMs < 0 ? p.vSpeedMs : null] as [number, number | null]);
+    const vUp = computed.windows.map(
+      (p) => [p.tSec, p.vSpeedMs >= 0 ? p.vSpeedMs : null] as [number, number | null]
+    );
+    const vDown = computed.windows.map(
+      (p) => [p.tSec, p.vSpeedMs < 0 ? p.vSpeedMs : null] as [number, number | null]
+    );
 
     const maxTSeries = computed.series.length ? computed.series[computed.series.length - 1].tSec : 0;
     const maxTWindows = computed.windows.length ? computed.windows[computed.windows.length - 1].tSec : 0;
@@ -220,15 +210,14 @@ function FlightDetailsRoute() {
     return { alt, hSpeed, vSpeed, vUp, vDown, maxT };
   }, [computed]);
 
-
   const timeMarker = `<span style="
-            display:inline-block;
-            margin-right:6px;
-            border-radius:50%;
-            width:10px;
-            height:10px;
-            background-color:#999;
-          "></span>`;
+    display:inline-block;
+    margin-right:6px;
+    border-radius:50%;
+    width:10px;
+    height:10px;
+    background-color:#999;
+  "></span>`;
 
   // ---- Options ----
   const altOption = React.useMemo(() => {
@@ -239,22 +228,17 @@ function FlightDetailsRoute() {
       tooltip: {
         trigger: "axis",
         axisPointer: { type: "cross" },
-        valueFormatter: (v: unknown) =>
-          typeof v === "number" ? v.toFixed(0) : String(v),
+        valueFormatter: (v: unknown) => (typeof v === "number" ? v.toFixed(0) : String(v)),
         formatter: (params: any) => {
           const list = Array.isArray(params) ? params : [params];
           const p0 = list[0];
-
-          // X: Sekunden als ganze Zahl
           const xSec = Math.round(Number(p0?.value?.[0] ?? p0?.axisValue ?? 0));
 
-          // Y: zuerst der Wert (deine Serie ist [x,y])
           const lines = list.map((p: any) => {
             const y = Number(p?.value?.[1] ?? p?.data?.[1] ?? p?.value ?? 0);
             return `${p.marker ?? ""}${p.seriesName}: ${Math.round(y)}`;
           });
 
-          // erst Werte, dann X
           return `${lines.join("<br/>")}<br/>${timeMarker}t: ${xSec}s`;
         },
       },
@@ -279,12 +263,7 @@ function FlightDetailsRoute() {
           moveOnMouseMove: true,
           moveOnMouseWheel: true,
         },
-        {
-          type: "slider",
-          xAxisIndex: 0,
-          height: 20,
-          bottom: 8,
-        },
+        { type: "slider", xAxisIndex: 0, height: 20, bottom: 8 },
       ],
       series: [
         {
@@ -302,33 +281,24 @@ function FlightDetailsRoute() {
   const varioOption = React.useMemo(() => {
     if (!chartData) return {};
     return {
-
       animation: false,
       grid: { left: 56, right: 16, top: 24, bottom: 24 },
       tooltip: {
         trigger: "axis",
         axisPointer: { type: "cross" },
         valueFormatter: (v: unknown) => (typeof v === "number" ? v.toFixed(2) : String(v)),
-
-        // ✅ WICHTIG: Tooltip NICHT an Maus koppeln (sonst hide bei mouseout)
         triggerOn: "none",
-
-        // ✅ WICHTIG: Tooltip bleibt stehen, bis wir ihn selbst hideTippen
         alwaysShowContent: true,
         formatter: (params: any) => {
           const list = Array.isArray(params) ? params : [params];
           const p0 = list[0];
-
-          // X: Sekunden als ganze Zahl
           const xSec = Math.round(Number(p0?.value?.[0] ?? p0?.axisValue ?? 0));
 
-          // Y: zuerst der Wert (deine Serie ist [x,y])
           const lines = list.map((p: any) => {
             const y = Number(p?.value?.[1] ?? p?.data?.[1] ?? p?.value ?? 0);
-            return `${p.marker ?? ""}${p.seriesName}: ${y.toFixed(2)}`;  // ✅ 3) HIER
+            return `${p.marker ?? ""}${p.seriesName}: ${y.toFixed(2)}`;
           });
 
-          // erst Werte, dann X
           return `${lines.join("<br/>")}<br/>${timeMarker}${xSec}s`;
         },
       },
@@ -340,16 +310,11 @@ function FlightDetailsRoute() {
         axisLabel: { formatter: (v: number) => fmtTime(v) },
         axisPointer: { show: true },
       },
-      yAxis: {
-        type: "value",
-        name: "m/s",
-        scale: true,
-      },
+      yAxis: { type: "value", name: "m/s", scale: true },
       dataZoom: [
         {
           type: "inside",
           xAxisIndex: 0,
-          // Wenn sync an: Interaktion hier aus, Alt treibt Zoom
           zoomOnMouseWheel: !syncZoom,
           moveOnMouseMove: !syncZoom,
           moveOnMouseWheel: !syncZoom,
@@ -360,8 +325,8 @@ function FlightDetailsRoute() {
           name: "Vario up",
           type: "bar",
           data: chartData.vUp,
-          large: false,        // ✅ 1) HIER
-          progressive: 0,     // ✅ 1) HIER
+          large: false,
+          progressive: 0,
           markLine: {
             symbol: ["none", "none"],
             lineStyle: { type: "dashed", opacity: 0.6 },
@@ -379,8 +344,8 @@ function FlightDetailsRoute() {
           name: "Vario down",
           type: "bar",
           data: chartData.vDown,
-          large: false,       // ✅ 1) HIER
-          progressive: 0,    // ✅ 1) HIER
+          large: false,
+          progressive: 0,
           itemStyle: {
             color: (p: any) => {
               const y = p.value?.[1];
@@ -407,30 +372,20 @@ function FlightDetailsRoute() {
         trigger: "axis",
         axisPointer: { type: "cross" },
         valueFormatter: (v: unknown) => (typeof v === "number" ? v.toFixed(2) : String(v)),
-
-        // ✅ WICHTIG: Tooltip NICHT an Maus koppeln (sonst hide bei mouseout)
         triggerOn: "none",
-
-        // ✅ WICHTIG: Tooltip bleibt stehen, bis wir ihn selbst hideTippen
         alwaysShowContent: true,
-
         formatter: (params: any) => {
           const list = Array.isArray(params) ? params : [params];
           const p0 = list[0];
-
-          // X: Sekunden als ganze Zahl
           const xSec = Math.round(Number(p0?.value?.[0] ?? p0?.axisValue ?? 0));
 
-          // Y: zuerst der Wert (deine Serie ist [x,y])
           const lines = list.map((p: any) => {
             const y = Number(p?.value?.[1] ?? p?.data?.[1] ?? p?.value ?? 0);
-            return `${p.marker ?? ""}${p.seriesName}: ${y.toFixed(1)}`; // speed: 1 Nachkommastelle
+            return `${p.marker ?? ""}${p.seriesName}: ${y.toFixed(1)}`;
           });
 
-          // erst Werte, dann X
           return `${lines.join("<br/>")}<br/>${timeMarker}${xSec}s`;
         },
-
       },
       axisPointer: { snap: true },
       xAxis: {
@@ -440,11 +395,7 @@ function FlightDetailsRoute() {
         axisLabel: { formatter: (v: number) => fmtTime(v) },
         axisPointer: { show: true },
       },
-      yAxis: {
-        type: "value",
-        name: "km/h",
-        scale: true,
-      },
+      yAxis: { type: "value", name: "km/h", scale: true },
       dataZoom: [
         {
           type: "inside",
@@ -481,12 +432,7 @@ function FlightDetailsRoute() {
         const dzs = alt.getOption()?.dataZoom as any[] | undefined;
         if (!dzs?.length) return;
 
-        // ✅ Slider bevorzugen (weil der verlässlich den Zustand hält)
-        const dz =
-          dzs.find((z) => z.type === "slider") ??
-          dzs.find((z) => z.type === "inside") ??
-          dzs[0];
-
+        const dz = dzs.find((z) => z.type === "slider") ?? dzs.find((z) => z.type === "inside") ?? dzs[0];
         if (!dz) return;
 
         try {
@@ -494,17 +440,9 @@ function FlightDetailsRoute() {
 
           if (typeof dz.start === "number" && typeof dz.end === "number") {
             for (const ch of [vario, speed]) {
-              ch.dispatchAction({
-                type: "dataZoom",
-                xAxisIndex: 0,
-                start: dz.start,
-                end: dz.end,
-              });
+              ch.dispatchAction({ type: "dataZoom", xAxisIndex: 0, start: dz.start, end: dz.end });
             }
-          } else if (
-            typeof dz.startValue === "number" &&
-            typeof dz.endValue === "number"
-          ) {
+          } else if (typeof dz.startValue === "number" && typeof dz.endValue === "number") {
             for (const ch of [vario, speed]) {
               ch.dispatchAction({
                 type: "dataZoom",
@@ -535,11 +473,8 @@ function FlightDetailsRoute() {
         const iAlt = safeClosestIndex(chartData.alt, x);
         const iSpeed = iAlt;
 
-        // ✅ Index im windows-array bestimmen
         const iV = safeClosestIndex(chartData.vSpeed, x);
         const vAt = chartData.vSpeed[iV]?.[1] ?? 0;
-
-        // ✅ up/down seriesIndex bestimmen
         const varioSeriesIndex = vAt >= 0 ? 0 : 1;
 
         try {
@@ -547,7 +482,6 @@ function FlightDetailsRoute() {
 
           alt.dispatchAction({ type: "showTip", seriesIndex: 0, dataIndex: iAlt });
 
-          // ✅ vario showTip auf die richtige Serie
           vario.dispatchAction({
             type: "showTip",
             xAxisIndex: 0,
@@ -564,14 +498,12 @@ function FlightDetailsRoute() {
             dataIndex: iSpeed,
           });
 
-          // ✅ AxisPointer Linie sichtbar halten
           vario.dispatchAction({ type: "updateAxisPointer", xAxisIndex: 0, value: x });
           speed.dispatchAction({ type: "updateAxisPointer", xAxisIndex: 0, value: x });
         } finally {
           syncingRef.current = false;
         }
       },
-
 
       globalout: () => {
         if (!syncZoom) return;
@@ -604,17 +536,11 @@ function FlightDetailsRoute() {
               Map open
             </Button>
           ) : (
-            <Button
-              leftSection={<IconX size={16} />}
-              variant="light"
-              onClick={() => setMapOpen(false)}
-            >
+            <Button leftSection={<IconX size={16} />} variant="light" onClick={() => setMapOpen(false)}>
               Map close
             </Button>
           )}
         </Group>
-
-
 
         {busy && <Text c="dimmed">Loading...</Text>}
 
@@ -628,8 +554,6 @@ function FlightDetailsRoute() {
 
         {flight && (
           <>
-
-
             {!computed || !chartData ? (
               <Text c="dimmed" size="sm">
                 Missing igcContent or flightDate.
@@ -638,9 +562,8 @@ function FlightDetailsRoute() {
               <>
                 <Group justify="space-between" align="center">
                   <Text size="sm">
-                    <b>Fixes:</b> {computed.fixesCount} &nbsp; <b>Series:</b>{" "}
-                    {computed.series.length} &nbsp; <b>Windows:</b>{" "}
-                    {computed.windows.length} (windowSec={windowSec})
+                    <b>Fixes:</b> {computed.fixesCount} &nbsp; <b>Series:</b> {computed.series.length} &nbsp;{" "}
+                    <b>Windows:</b> {computed.windows.length} (windowSec={windowSec})
                   </Text>
 
                   <Checkbox
@@ -649,14 +572,14 @@ function FlightDetailsRoute() {
                     onChange={(e) => setSyncZoom(e.currentTarget.checked)}
                   />
                 </Group>
+
+                {/* SPLIT LAYOUT */}
                 <Box
                   ref={containerRef}
                   style={{
                     display: "flex",
-                    gap: 0,
                     alignItems: "stretch",
                     width: "100%",
-                    minHeight: 320,
                   }}
                 >
                   {/* LEFT: Charts */}
@@ -713,24 +636,27 @@ function FlightDetailsRoute() {
                     </Stack>
                   </Box>
 
-                  {/* MIDDLE: Splitter (nur wenn Map offen) */}
+                  {/* MIDDLE: Drag Handle */}
                   {mapOpen && (
-                    <Divider
-                      orientation="vertical"
+                    <Box
                       onPointerDown={onDividerPointerDown}
                       onPointerMove={onDividerPointerMove}
                       onPointerUp={onDividerPointerUp}
                       style={{
+                        width: 12,
                         cursor: "col-resize",
                         userSelect: "none",
                         touchAction: "none",
-                        width: 10,               // dick genug zum greifen
+                        display: "flex",
+                        alignItems: "stretch",
                         marginRight: 12,
                       }}
-                    />
+                    >
+                      <Box style={{ width: 1, margin: "0 auto", background: "var(--mantine-color-gray-3)" }} />
+                    </Box>
                   )}
 
-                  {/* RIGHT: Map (nur wenn offen) */}
+                  {/* RIGHT: Map */}
                   {mapOpen && (
                     <Box
                       style={{
@@ -745,15 +671,13 @@ function FlightDetailsRoute() {
                         Map
                       </Text>
 
-                      {/* Leaflet braucht echte Höhe -> Map nimmt den Rest */}
+                      {/* IMPORTANT: Map should fill remaining height */}
                       <Box style={{ flex: 1, minHeight: 0 }}>
                         <FlightMap points={computed?.mapPoints ?? []} />
                       </Box>
                     </Box>
                   )}
                 </Box>
-
-
               </>
             )}
           </>
