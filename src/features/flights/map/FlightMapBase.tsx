@@ -2,7 +2,8 @@ import * as React from "react";
 import { MapContainer, TileLayer, Polyline, useMap, useMapEvents } from "react-leaflet";
 import type { LatLngTuple } from "leaflet";
 import "leaflet/dist/leaflet.css";
-import { Box, Group, Slider, Text } from "@mantine/core";
+import { Box, Group, Text, RangeSlider, Tooltip, Slider, ActionIcon } from "@mantine/core";
+import { IconLock, IconLockOpen } from "@tabler/icons-react";
 
 type BaseMap = "osm" | "topo";
 
@@ -27,7 +28,6 @@ function formatTime(sec: number) {
     return `${m}:${String(r).padStart(2, "0")}`;
 }
 
-
 function varioColorStep(v: number) {
     const a = Math.abs(v);
 
@@ -41,12 +41,12 @@ function varioColorStep(v: number) {
         // + (Steigen) — kräftiges Grün
         if (level === 1) return "#4ade80"; // green-400 (hell, gut sichtbar)
         if (level === 2) return "#22c55e"; // green-500
-        return "#15803d";                 // green-700 (dunkel, sehr kontrastreich)
+        return "#15803d"; // green-700 (dunkel, sehr kontrastreich)
     } else {
         // - (Sinken) — kräftiges Rot
         if (level === 1) return "#f87171"; // red-400
         if (level === 2) return "#ef4444"; // red-500
-        return "#991b1b";                 // red-800
+        return "#991b1b"; // red-800
     }
 }
 
@@ -55,9 +55,9 @@ function varioColorStep(v: number) {
  */
 function weightsForZoom(z: number) {
     // z klein (rausgezoomt) => dickere Linie
-    const line = clamp(7.0 - z * 0.45, 2.2, 4.5);      // z=9 -> ~3.0, z=12 -> ~2.6, z=15 -> ~2.2
+    const line = clamp(7.0 - z * 0.45, 2.2, 4.5); // z=9 -> ~3.0, z=12 -> ~2.6, z=15 -> ~2.2
     const shadow = clamp(line + 4.0 - (z - 10) * 0.8, 2.0, 6.5); // z klein => shadow größer
-    const shadowOpacity = z <= 11 ? 0.85 : 0.55;       // rauszoom: kräftiger
+    const shadowOpacity = z <= 11 ? 0.85 : 0.55; // rauszoom: kräftiger
     return { line, shadow, shadowOpacity };
 }
 
@@ -144,28 +144,88 @@ export function FlightMap({
     watchKey?: unknown;
     baseMap?: BaseMap;
 }) {
-    const hasTrack = points.length >= 2;
+    const totalPoints = points.length;
+    const hasTrack = totalPoints >= 2;
 
-    const [routePct, setRoutePct] = React.useState(100);
-    const total = points.length;
+    const totalSeconds = Math.max(0, totalPoints - 1);
 
-    // 0..100% => 0..total Punkte
-    const clippedPoints = React.useMemo(() => {
-        if (total === 0) return [];
-        const endIndex = clamp(
-            Math.floor((routePct / 100) * (total - 1)),
+    // Zeitfenster als Range in %
+    const [rangePct, setRangePct] = React.useState<[number, number]>([0, 100]);
+
+    // Freeze / window-lock
+    const [freezeWindow, setFreezeWindow] = React.useState(false);
+
+    // für Freeze-Mode: Position des Fensters (Start in %)
+    const [windowStartPct, setWindowStartPct] = React.useState(0);
+
+    // Nur beim EINSCHALTEN initialisieren (sonst ruckelt's)
+    React.useEffect(() => {
+        if (!freezeWindow) return;
+        setWindowStartPct(rangePct[0]);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [freezeWindow]);
+
+    // Normalisieren: start <= end
+    const [startPctRaw, endPctRaw] = rangePct;
+    const startPct = Math.min(startPctRaw, endPctRaw);
+    const endPct = Math.max(startPctRaw, endPctRaw);
+
+    // Für Freeze: Breite einfrieren
+    const windowWidthPct = Math.max(1, endPct - startPct);
+
+    const effectiveRange: [number, number] = React.useMemo(() => {
+        if (!freezeWindow) return [startPct, endPct];
+
+        const maxStart = 100 - windowWidthPct;
+        const s = clamp(windowStartPct, 0, maxStart);
+        const e = s + windowWidthPct;
+        return [s, e];
+    }, [freezeWindow, startPct, endPct, windowStartPct, windowWidthPct]);
+
+    // Wenn Freeze aktiv, halte rangePct synchron — aber ohne Update-Loop/Jitter
+    React.useEffect(() => {
+        if (!freezeWindow) return;
+
+        setRangePct((prev) => {
+            if (prev[0] === effectiveRange[0] && prev[1] === effectiveRange[1]) return prev;
+            return effectiveRange;
+        });
+    }, [freezeWindow, effectiveRange]);
+
+    // Sekundenanzeige aus effectiveRange (immer korrekt)
+    const startSeconds = Math.floor((effectiveRange[0] / 100) * totalSeconds);
+    const endSeconds = Math.floor((effectiveRange[1] / 100) * totalSeconds);
+
+    // Indizes aus effectiveRange
+    const { startIdx, endIdx } = React.useMemo(() => {
+        if (totalPoints < 2) return { startIdx: 0, endIdx: 0 };
+
+        const s = clamp(
+            Math.floor((effectiveRange[0] / 100) * (totalPoints - 1)),
             0,
-            total - 1
+            totalPoints - 2
         );
-        return points.slice(0, endIndex + 1);
-    }, [routePct, total, points]);
 
-    // vario passt zu Segmenten (points-1). Wenn wir Punkte clippen, brauchen wir vario bis (clippedPoints.length-1)
+        const e = clamp(
+            Math.floor((effectiveRange[1] / 100) * (totalPoints - 1)),
+            s + 1,
+            totalPoints - 1
+        );
+
+        return { startIdx: s, endIdx: e };
+    }, [effectiveRange, totalPoints]);
+
+    const clippedPoints = React.useMemo(() => {
+        if (totalPoints < 2) return [];
+        return points.slice(startIdx, endIdx + 1);
+    }, [points, startIdx, endIdx, totalPoints]);
+
+    // BUGFIX: vario muss mit startIdx offset gesliced werden (sonst Farben falsch bei start>0)
     const clippedVario = React.useMemo(() => {
         if (!vario) return undefined;
         const segCount = Math.max(0, clippedPoints.length - 1);
-        return vario.slice(0, segCount);
-    }, [vario, clippedPoints.length]);
+        return vario.slice(startIdx, startIdx + segCount);
+    }, [vario, startIdx, clippedPoints.length]);
 
     const segments = React.useMemo(() => {
         if (clippedPoints.length < 2) return null;
@@ -174,7 +234,7 @@ export function FlightMap({
 
     // fallback center (München)
     const fallbackCenter: LatLngTuple = [48.1372, 11.5756];
-    const center = clippedPoints.length > 0 ? clippedPoints[0] : (hasTrack ? points[0] : fallbackCenter);
+    const center = clippedPoints.length > 0 ? clippedPoints[0] : hasTrack ? points[0] : fallbackCenter;
 
     const initialZoom = hasTrack ? 13 : 11;
     const [zoom, setZoom] = React.useState<number>(initialZoom);
@@ -186,32 +246,65 @@ export function FlightMap({
     const { line } = React.useMemo(() => weightsForZoom(zoom), [zoom]);
     const tile = TILE[baseMap];
 
-
-    const totalSeconds = Math.max(0, points.length - 1);
-
-    const currentSeconds = React.useMemo(() => {
-        return Math.floor((routePct / 100) * totalSeconds);
-    }, [routePct, totalSeconds]);
-
-
     return (
         <Box style={{ display: "flex", flexDirection: "column", height: "100%" }}>
             <Group justify="space-between" mb="xs">
-                <Text fw={600}>Route</Text>
-                <Text c="dimmed">
-                    {formatTime(currentSeconds)} / {formatTime(totalSeconds)}
-                </Text>
+                <Text fw={600}>Zeitfenster</Text>
+
+                <Group gap="xs">
+                    <Text c="dimmed">
+                        {formatTime(startSeconds)} → {formatTime(endSeconds)} / {formatTime(totalSeconds)}
+                    </Text>
+
+                    <Tooltip label={freezeWindow ? "Fenster entsperren" : "Fensterbreite einfrieren"}>
+                        <ActionIcon
+                            variant="light"
+                            onClick={() => setFreezeWindow((v) => !v)}
+                            aria-label="Freeze window"
+                        >
+                            {freezeWindow ? <IconLock size={16} /> : <IconLockOpen size={16} />}
+                        </ActionIcon>
+                    </Tooltip>
+                </Group>
             </Group>
 
-            <Slider
-                value={routePct}
-                onChange={setRoutePct}
+            <RangeSlider
+                value={rangePct}
+                onChange={(next) => {
+                    if (freezeWindow) {
+                        // Breite bleibt fix, Block wird verschoben über den Start
+                        const width = windowWidthPct;
+                        const maxStart = 100 - width;
+                        const s = clamp(next[0], 0, maxStart);
+                        setWindowStartPct(s);
+                        setRangePct([s, s + width]);
+                        return;
+                    }
+                    setRangePct(next);
+                }}
                 min={0}
                 max={100}
                 step={1}
-                label={(v) => `${v}%`}
+                minRange={1}
                 mb="sm"
             />
+
+            {freezeWindow && (
+                <Box mb="sm">
+                    <Text size="sm" c="dimmed" mb={4}>
+                        Fenster verschieben
+                    </Text>
+                    <Slider
+                        value={windowStartPct}
+                        onChange={setWindowStartPct}
+                        min={0}
+                        max={100 - windowWidthPct}
+                        step={1}
+                        label={(v) => `${v}%`}
+                    />
+                </Box>
+            )}
+
             <Box style={{ flex: 1, minHeight: 0 }}>
                 <MapContainer
                     center={center}
@@ -234,7 +327,7 @@ export function FlightMap({
                         />
                     ))}
 
-                    {/* Fallback, falls du mal ohne Segmente rendern willst */}
+                    {/* Fallback */}
                     {!segments && clippedPoints.length >= 2 && <Polyline positions={clippedPoints} />}
 
                     <ZoomWatcher onZoom={setZoom} />
