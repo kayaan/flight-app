@@ -29,6 +29,7 @@ function fmtTime(sec: number) {
   if (hh > 0) return `${hh}:${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}`;
   return `${mm}:${String(ss).padStart(2, "0")}`;
 }
+
 function clamp01(x: number) {
   return Math.max(0, Math.min(1, x));
 }
@@ -73,7 +74,7 @@ function FlightDetailsRoute() {
   const token = useAuthStore((s) => s.token);
   const { id } = Route.useParams();
 
-  const [baseMap, setBaseMap] = React.useState<"osm" | "topo">("osm");
+  const [baseMap, setBaseMap] = React.useState<"osm" | "topo">("topo");
 
   const [flight, setFlight] = React.useState<FlightRecordDetails | null>(null);
   const [busy, setBusy] = React.useState(false);
@@ -209,7 +210,11 @@ function FlightDetailsRoute() {
     const maxTWindows = computed.windows.length ? computed.windows[computed.windows.length - 1].tSec : 0;
     const maxT = Math.max(maxTSeries, maxTWindows);
 
-    return { alt, hSpeed, vSpeed, vUp, vDown, maxT };
+    const altValues = alt.map((p) => p[1]);
+    const altMin = Math.min(...altValues);
+    const altMax = Math.max(...altValues)
+
+    return { alt, hSpeed, vSpeed, vUp, vDown, maxT, altMin, altMax };
   }, [computed]);
 
   const timeMarker = `<span style="
@@ -254,6 +259,8 @@ function FlightDetailsRoute() {
       yAxis: {
         type: "value",
         name: "m",
+        min: chartData.altMin,
+        max: chartData.altMax,
         axisLabel: { formatter: (v: number) => String(Math.round(v)) },
         scale: true,
       },
