@@ -26,7 +26,7 @@ import * as echarts from "echarts";
 import { FlightMap } from "../features/flights/map/FlightMapBase";
 import type { LatLngTuple } from "leaflet";
 
-import { ActionIcon, Divider } from "@mantine/core";
+import { Divider } from "@mantine/core";
 import { IconMap, IconX } from "@tabler/icons-react";
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -715,32 +715,40 @@ function FlightDetailsRoute() {
 
                   {/* MIDDLE: Splitter (nur wenn Map offen) */}
                   {mapOpen && (
+                    <Divider
+                      orientation="vertical"
+                      onPointerDown={onDividerPointerDown}
+                      onPointerMove={onDividerPointerMove}
+                      onPointerUp={onDividerPointerUp}
+                      style={{
+                        cursor: "col-resize",
+                        userSelect: "none",
+                        touchAction: "none",
+                        width: 10,               // dick genug zum greifen
+                        marginRight: 12,
+                      }}
+                    />
+                  )}
+
+                  {/* RIGHT: Map (nur wenn offen) */}
+                  {mapOpen && (
                     <Box
                       style={{
                         width: `${100 - splitPct}%`,
-                        minWidth: 240,
+                        minWidth: 260,
                         display: "flex",
                         flexDirection: "column",
+                        alignItems: "stretch",
                       }}
                     >
                       <Text size="sm" fw={600} mb={4}>
                         Map
                       </Text>
 
+                      {/* Leaflet braucht echte Höhe -> Map nimmt den Rest */}
                       <Box style={{ flex: 1, minHeight: 0 }}>
                         <FlightMap points={computed?.mapPoints ?? []} />
                       </Box>
-                    </Box>
-                  )}
-
-                  {/* RIGHT: Map (nur wenn offen) */}
-                  {mapOpen && (
-                    <Box style={{ width: `${100 - splitPct}%`, minWidth: 240 }}>
-                      <Text size="sm" fw={600} mb={4}>
-                        Map
-                      </Text>
-
-                      <FlightMap points={computed?.mapPoints ?? []} />
                     </Box>
                   )}
                 </Box>

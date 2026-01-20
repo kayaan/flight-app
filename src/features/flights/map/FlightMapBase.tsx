@@ -1,37 +1,44 @@
-import React from "react";
+import * as React from "react";
 import { MapContainer, TileLayer, Polyline, useMap } from "react-leaflet";
-import { type LatLngTuple } from "leaflet";
-import "leaflet/dist/leaflet.css";
-import { Marker, Popup } from "react-leaflet";
+import type { LatLngTuple } from "leaflet";
 
-type Props = {
-    points: LatLngTuple[];
-    fallbackCenter?: LatLngTuple;
-    fallbackZoom?: number;
-};
-
-function FitToTrack({ points }: { points: LatLngTuple[] }) {
+function MapAutoResize({ watchKey }: { watchKey?: unknown }) {
     const map = useMap();
 
     React.useEffect(() => {
-        if (points.length < 2) return;
-        map.fitBounds(points, { padding: [20, 20] });
-    }, [map, points]);
+        // direkt + nochmal kurz später (CSS/layout settle)
+        map.invalidateSize();
+        const t = window.setTimeout(() => map.invalidateSize(), 60);
+        return () => window.clearTimeout(t);
+    }, [map, watchKey]);
+
+    React.useEffect(() => {
+        const el = map.getContainer();
+        if (!el) return;
+
+        const ro = new ResizeObserver(() => {
+            map.invalidateSize();
+        });
+
+        ro.observe(el);
+        return () => ro.disconnect();
+    }, [map]);
 
     return null;
 }
-
 export function FlightMap({
     points,
-    fallbackCenter = [48.1372, 11.5756],
-    fallbackZoom = 11,
-}: Props) {
+    watchKey,
+}: {
+    points: LatLngTuple[];
+    watchKey?: unknown;
+}) {
     const hasTrack = points.length >= 2;
 
     return (
         <MapContainer
-            center={hasTrack ? points[0] : fallbackCenter}
-            zoom={hasTrack ? 13 : fallbackZoom}
+            center={hasTrack ? points[0] : [48.1372, 11.5756]}
+            zoom={hasTrack ? 13 : 11}
             style={{ height: "100%", width: "100%" }}
         >
             <TileLayer
@@ -39,19 +46,10 @@ export function FlightMap({
                 attribution="&copy; OpenStreetMap contributors"
             />
 
-            {hasTrack && (
-                <>
-                    <Polyline positions={points} />
-                    <FitToTrack points={points} />
-                    <Marker position={points[0]}>
-                        <Popup>Takeoff</Popup>
-                    </Marker>
+            {hasTrack && <Polyline positions={points} />}
 
-                    <Marker position={points[points.length - 1]}>
-                        <Popup>Landing</Popup>
-                    </Marker>
-                </>
-            )}
+            {/* DAS ist der wichtige Teil */}
+            <MapAutoResize watchKey={watchKey} />
         </MapContainer>
     );
 }
