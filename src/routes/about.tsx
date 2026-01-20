@@ -1,5 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router'
 
 export const Route = createFileRoute('/about')({
-    component: () => <h1>About</h1>,
+    component: () => <div style={{ border: "2px solid red" }}>about
+    </div>,
 })

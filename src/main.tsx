@@ -8,6 +8,7 @@ import { createRouter, RouterProvider } from '@tanstack/react-router'
 import '@mantine/core/styles.css'
 import { MantineProvider } from '@mantine/core'
 import { ModalsProvider } from '@mantine/modals'
+import "leaflet/dist/leaflet.css";
 
 const router = createRouter({ routeTree })
 

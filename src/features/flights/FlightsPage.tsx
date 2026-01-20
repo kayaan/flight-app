@@ -16,7 +16,7 @@ import { modals } from "@mantine/modals";
 import { Outlet } from "@tanstack/react-router";
 import { useFlightsStore } from "./store/flights.store";
 import { useAuthStore } from "../auth/store/auth.store";
-import { FlightsTableSimpleFast } from "./FlightsTableFast";
+import { FlightsTableBareVirtual } from "./FlightsTableDynamic";
 
 
 function getErrorMessage(err: unknown, fallback: string) {
@@ -151,7 +151,13 @@ export function FlightsPage() {
     const busy = loading || uploading || deletingAll;
 
     const actionsDisabled = loading || uploading || deletingAll;
-
+    if (!token) {
+        return (
+            <Alert>
+                Please login to view your flights.
+            </Alert>
+        );
+    }
     return (
         <div>
             <Stack gap="md">
@@ -210,7 +216,15 @@ export function FlightsPage() {
                         <Loader />
                     </Group>
                 ) : (
-                    <FlightsTableSimpleFast
+                    // <FlightsTableSimpleFast
+                    //     flights={flights}
+                    //     deletingId={deletingId}
+                    //     onDelete={confirmDeleteFlight}
+                    // />
+
+                    // <FlightsTableBare flights={flights} deletingId={deletingId} onDelete={confirmDeleteFlight} />
+
+                    <FlightsTableBareVirtual
                         flights={flights}
                         deletingId={deletingId}
                         onDelete={confirmDeleteFlight}

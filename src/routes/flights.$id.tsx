@@ -4,7 +4,6 @@ import {
   Box,
   Stack,
   Text,
-  Title,
   Alert,
   Button,
   Group,
@@ -24,7 +23,11 @@ import { useAuthStore } from "../features/auth/store/auth.store";
 import { flightApi } from "../features/flights/flights.api";
 
 import * as echarts from "echarts";
+import { FlightMap } from "../features/flights/map/FlightMapBase";
+import type { LatLngTuple } from "leaflet";
 
+import { ActionIcon, Divider } from "@mantine/core";
+import { IconMap, IconX } from "@tabler/icons-react";
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 export const Route = createFileRoute("/flights/$id")({
@@ -96,13 +99,62 @@ function FlightDetailsRoute() {
   // ✅ Prevent recursion / event loops
   const syncingRef = React.useRef(false);
 
+
+  const [mapOpen, setMapOpen] = React.useState(false);
+
+  // Anteil links (Charts) in %, nur relevant wenn mapOpen=true
+  const [splitPct, setSplitPct] = React.useState(60);
+
+  const containerRef = React.useRef<HTMLDivElement | null>(null);
+  const draggingRef = React.useRef(false);
+
+  function clamp(n: number, min: number, max: number) {
+    return Math.min(max, Math.max(min, n));
+  }
+
+  const onDividerPointerDown = React.useCallback((e: React.PointerEvent) => {
+    if (!mapOpen) return;
+    draggingRef.current = true;
+    (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
+  }, [mapOpen]);
+
+  const onDividerPointerMove = React.useCallback((e: React.PointerEvent) => {
+    if (!draggingRef.current) return;
+    const el = containerRef.current;
+    if (!el) return;
+
+    const rect = el.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const pct = (x / rect.width) * 100;
+
+    // Grenzen: Charts min 40%, Map min 25%
+    setSplitPct(clamp(pct, 40, 75));
+  }, []);
+
+  const onDividerPointerUp = React.useCallback(() => {
+    draggingRef.current = false;
+  }, []);
+
+  function sampleEveryNth<T>(arr: T[], n: number): T[] {
+    if (n <= 1) return arr;
+    const out: T[] = [];
+    for (let i = 0; i < arr.length; i += n) out.push(arr[i]);
+    return out;
+  }
+
   const computed = React.useMemo(() => {
     if (!flight?.igcContent || !flight.flightDate) return null;
 
     const fixes = parseIgcFixes(flight.igcContent, flight.flightDate);
     const { series, windows } = buildFlightSeries(fixes, windowSec);
 
-    return { fixesCount: fixes.length, series, windows };
+    // Leaflet points: [lat, lon]
+    const rawPoints: LatLngTuple[] = fixes.map((f) => [f.lat, f.lon]);
+
+    // Performance: n=1 (kein sampling) oder z.B. 3/5/10
+    const mapPoints = sampleEveryNth(rawPoints, 3);
+
+    return { fixesCount: fixes.length, series, windows, mapPoints };
   }, [flight?.igcContent, flight?.flightDate, windowSec]);
 
   React.useEffect(() => {
@@ -133,6 +185,22 @@ function FlightDetailsRoute() {
       cancelled = true;
     };
   }, [id, token]);
+
+
+  React.useEffect(() => {
+    const alt = altRef.current?.getEchartsInstance?.();
+    const vario = varioRef.current?.getEchartsInstance?.();
+    const speed = speedRef.current?.getEchartsInstance?.();
+
+    // kleiner delay, damit Layout fertig ist
+    const t = window.setTimeout(() => {
+      alt?.resize();
+      vario?.resize();
+      speed?.resize();
+    }, 50);
+
+    return () => window.clearTimeout(t);
+  }, [mapOpen, splitPct]);
 
   // ---- Build chart data (arrays are fastest for ECharts) ----
   const chartData = React.useMemo(() => {
@@ -521,18 +589,29 @@ function FlightDetailsRoute() {
   return (
     <Box p="md">
       <Stack gap="sm">
-        <Group justify="space-between">
-          <span>
-            <Title order={3}>Flight details</Title>
-            {flight?.igcContent && (
-              <Text size="xs" c="dimmed">
-                IGC length: {flight.igcContent.length}
-              </Text>
-            )}
-          </span>
+        <Group gap="xs">
           <Button variant="light" onClick={() => window.history.back()}>
             Back
           </Button>
+
+          {!mapOpen ? (
+            <Button
+              leftSection={<IconMap size={16} />}
+              variant="light"
+              onClick={() => setMapOpen(true)}
+              disabled={!computed?.mapPoints?.length}
+            >
+              Map open
+            </Button>
+          ) : (
+            <Button
+              leftSection={<IconX size={16} />}
+              variant="light"
+              onClick={() => setMapOpen(false)}
+            >
+              Map close
+            </Button>
+          )}
         </Group>
 
 
@@ -570,51 +649,103 @@ function FlightDetailsRoute() {
                     onChange={(e) => setSyncZoom(e.currentTarget.checked)}
                   />
                 </Group>
+                <Box
+                  ref={containerRef}
+                  style={{
+                    display: "flex",
+                    gap: 0,
+                    alignItems: "stretch",
+                    width: "100%",
+                    minHeight: 320,
+                  }}
+                >
+                  {/* LEFT: Charts */}
+                  <Box
+                    style={{
+                      width: mapOpen ? `${splitPct}%` : "100%",
+                      paddingRight: mapOpen ? 12 : 0,
+                      transition: "width 120ms ease",
+                    }}
+                  >
+                    <Stack gap="xs">
+                      <Box>
+                        <Text size="sm" fw={600} mb={4}>
+                          Altitude
+                        </Text>
+                        <EChartsReact
+                          echarts={echarts}
+                          ref={altRef as any}
+                          option={altOption}
+                          style={{ height: 320, width: "100%" }}
+                          onEvents={altEvents}
+                          notMerge
+                          lazyUpdate
+                        />
+                      </Box>
 
-                <Stack gap="xs">
-                  <Box>
-                    <Text size="sm" fw={600} mb={4}>
-                      Altitude
-                    </Text>
-                    <EChartsReact
-                      echarts={echarts}
-                      ref={altRef as any}
-                      option={altOption}
-                      style={{ height: 320, width: "100%" }}
-                      onEvents={altEvents}
-                      notMerge
-                      lazyUpdate
-                    />
+                      <Box>
+                        <Text size="sm" fw={600} mb={4}>
+                          Vertical speed (Vario)
+                        </Text>
+                        <EChartsReact
+                          echarts={echarts}
+                          ref={varioRef as any}
+                          option={varioOption}
+                          style={{ height: 220, width: "100%" }}
+                          notMerge
+                          lazyUpdate
+                        />
+                      </Box>
+
+                      <Box>
+                        <Text size="sm" fw={600} mb={4}>
+                          Horizontal speed
+                        </Text>
+                        <EChartsReact
+                          echarts={echarts}
+                          ref={speedRef as any}
+                          option={speedOption}
+                          style={{ height: 220, width: "100%" }}
+                          notMerge
+                          lazyUpdate
+                        />
+                      </Box>
+                    </Stack>
                   </Box>
 
-                  <Box>
-                    <Text size="sm" fw={600} mb={4}>
-                      Vertical speed (Vario)
-                    </Text>
-                    <EChartsReact
-                      echarts={echarts}
-                      ref={varioRef as any}
-                      option={varioOption}
-                      style={{ height: 220, width: "100%" }}
-                      notMerge
-                      lazyUpdate
-                    />
-                  </Box>
+                  {/* MIDDLE: Splitter (nur wenn Map offen) */}
+                  {mapOpen && (
+                    <Box
+                      style={{
+                        width: `${100 - splitPct}%`,
+                        minWidth: 240,
+                        display: "flex",
+                        flexDirection: "column",
+                      }}
+                    >
+                      <Text size="sm" fw={600} mb={4}>
+                        Map
+                      </Text>
 
-                  <Box>
-                    <Text size="sm" fw={600} mb={4}>
-                      Horizontal speed
-                    </Text>
-                    <EChartsReact
-                      echarts={echarts}
-                      ref={speedRef as any}
-                      option={speedOption}
-                      style={{ height: 220, width: "100%" }}
-                      notMerge
-                      lazyUpdate
-                    />
-                  </Box>
-                </Stack>
+                      <Box style={{ flex: 1, minHeight: 0 }}>
+                        <FlightMap points={computed?.mapPoints ?? []} />
+                      </Box>
+                    </Box>
+                  )}
+
+                  {/* RIGHT: Map (nur wenn offen) */}
+                  {mapOpen && (
+                    <Box style={{ width: `${100 - splitPct}%`, minWidth: 240 }}>
+                      <Text size="sm" fw={600} mb={4}>
+                        Map
+                      </Text>
+
+                      <FlightMap points={computed?.mapPoints ?? []} />
+                    </Box>
+                  )}
+                </Box>
+
+
               </>
             )}
           </>
