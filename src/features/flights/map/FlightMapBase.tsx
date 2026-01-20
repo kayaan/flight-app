@@ -1,6 +1,7 @@
 import * as React from "react";
 import { MapContainer, TileLayer, Polyline, useMap } from "react-leaflet";
 import type { LatLngTuple } from "leaflet";
+import "leaflet/dist/leaflet.css";
 
 type BaseMap = "osm" | "topo";
 
@@ -47,26 +48,38 @@ const TILE = {
 export function FlightMap({
     points,
     watchKey,
-    baseMap = "osm"
+    baseMap = "osm",
 }: {
     points: LatLngTuple[];
     watchKey?: unknown;
-    baseMap?: BaseMap
+    baseMap?: BaseMap;
 }) {
     const hasTrack = points.length >= 2;
+
+    // fallback center (München)
+    const fallbackCenter: LatLngTuple = [48.1372, 11.5756];
+
+    // wenn Track da: nimm ersten Punkt als initial center
+    const center = hasTrack ? points[0] : fallbackCenter;
+    const zoom = hasTrack ? 13 : 11;
 
     const tile = TILE[baseMap];
 
     return (
-        <MapContainer /* ... */ style={{ height: "100%", width: "100%" }}>
+        <MapContainer
+            center={center}
+            zoom={zoom}
+            style={{ height: "100%", width: "100%" }}
+            preferCanvas
+        >
             <TileLayer
-                key={tile.key}          // <- wichtig: remount beim Wechsel
+                key={tile.key} // remount beim Wechsel
                 url={tile.url}
                 attribution={tile.attribution}
             />
+
             {hasTrack && <Polyline positions={points} />}
 
-            {/* DAS ist der wichtige Teil */}
             <MapAutoResize watchKey={watchKey} />
         </MapContainer>
     );
