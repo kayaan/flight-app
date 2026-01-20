@@ -141,11 +141,28 @@ function FlightDetailsRoute() {
     const fixes = parseIgcFixes(flight.igcContent, flight.flightDate);
     const { series, windows } = buildFlightSeries(fixes, windowSec);
 
-    const rawPoints: LatLngTuple[] = fixes.map((f) => [f.lat, f.lon]);
-    const mapPoints = sampleEveryNth(rawPoints, 3);
+    const step = 3; // <— hier steuerst du Performance
 
-    return { fixesCount: fixes.length, series, windows, mapPoints };
+    // Leaflet points: [lat, lon]
+    const rawPoints: LatLngTuple[] = fixes.map((f) => [f.lat, f.lon]);
+
+    // Vario pro Segment (Fix i -> i+1)
+    const rawVario: number[] = [];
+    for (let i = 0; i < fixes.length - 1; i++) {
+      const dt = fixes[i + 1].tSec - fixes[i].tSec;
+      const da = fixes[i + 1].altitudeM - fixes[i].altitudeM;
+
+      // dt kann bei kaputten Logs 0 sein -> clamp
+      rawVario.push(da / Math.max(0.5, dt));
+    }
+
+    // Sampling konsistent
+    const mapPoints = sampleEveryNth(rawPoints, step);
+    const mapVario = sampleEveryNth(rawVario, step);
+
+    return { fixesCount: fixes.length, series, windows, mapPoints, mapVario };
   }, [flight?.igcContent, flight?.flightDate, windowSec]);
+
 
   React.useEffect(() => {
     let cancelled = false;
@@ -692,7 +709,10 @@ function FlightDetailsRoute() {
                       <Box style={{ flex: 1, minHeight: 0 }}>
                         <FlightMap
                           points={computed?.mapPoints ?? []}
-                          baseMap={baseMap} />
+                          vario={computed?.mapVario}
+                          baseMap={baseMap}
+                          watchKey={`${mapOpen}-${splitPct}-${baseMap}`}
+                        />
                       </Box>
                     </Box>
                   )}

@@ -9,6 +9,7 @@ import {
     Title,
     FileButton,
     LoadingOverlay,
+    Box,
 } from "@mantine/core";
 import { IconAlertCircle, IconUpload } from "@tabler/icons-react";
 import { flightApi } from "./flights.api";
@@ -159,7 +160,7 @@ export function FlightsPage() {
         );
     }
     return (
-        <div>
+        <Box h="100vh">
             <Stack gap="md">
                 <LoadingOverlay visible={busy} zIndex={1000} overlayProps={{ radius: "md", blur: 1 }} />
                 <Group justify="space-between" align="center">
@@ -232,6 +233,6 @@ export function FlightsPage() {
                 )}
             </Stack>
             <Outlet />
-        </div >
+        </Box >
     );
 }
