@@ -20,6 +20,37 @@ import { IconMap, IconX } from "@tabler/icons-react";
 export const Route = createFileRoute("/flights/$id")({
   component: FlightDetailsRoute,
 });
+const LS_KEY = "flyapp.flightDetails.layout.v1";
+
+type LayoutPrefs = {
+  mapOpen: boolean;
+  splitPct: number;
+};
+
+
+
+function loadLayoutPrefs(): LayoutPrefs {
+  try {
+    const raw = localStorage.getItem(LS_KEY);
+    if (!raw) return { mapOpen: false, splitPct: 60 };
+
+    const parsed = JSON.parse(raw) as Partial<LayoutPrefs>;
+    const mapOpen = Boolean(parsed.mapOpen);
+    const splitPct = clamp(Number(parsed.splitPct ?? 60), 40, 75);
+
+    return { mapOpen, splitPct };
+  } catch {
+    return { mapOpen: false, splitPct: 60 };
+  }
+}
+
+function saveLayoutPrefs(p: LayoutPrefs) {
+  try {
+    localStorage.setItem(LS_KEY, JSON.stringify(p));
+  } catch {
+    // ignore (private mode etc.)
+  }
+}
 
 function fmtTime(sec: number) {
   const s = Math.max(0, Math.floor(sec));
@@ -95,8 +126,13 @@ function FlightDetailsRoute() {
   const syncingRef = React.useRef(false);
 
   // ✅ Map panel + splitter
-  const [mapOpen, setMapOpen] = React.useState(false);
-  const [splitPct, setSplitPct] = React.useState(60); // charts width %
+  const [mapOpen, setMapOpen] = React.useState<boolean>(() => loadLayoutPrefs().mapOpen);
+  const [splitPct, setSplitPct] = React.useState<number>(() => loadLayoutPrefs().splitPct);
+
+  React.useEffect(() => {
+    saveLayoutPrefs({ mapOpen, splitPct });
+  }, [mapOpen, splitPct]);
+
   const containerRef = React.useRef<HTMLDivElement | null>(null);
   const draggingRef = React.useRef(false);
 
