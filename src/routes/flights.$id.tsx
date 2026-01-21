@@ -34,14 +34,16 @@ function clamp01(x: number) {
   return Math.max(0, Math.min(1, x));
 }
 
+function clamp(n: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, n));
+}
+
 function varioColor(v: number) {
   const max = 7;
   const t = clamp01(Math.abs(v) / max); // 0..1
-
   const hue = v >= 0 ? 120 : 0; // grün / rot
   const sat = 35 + t * 45; // 35% -> 80%
   const light = 78 - t * 45; // 78% -> 33%
-
   return `hsl(${hue}, ${sat}%, ${light}%)`;
 }
 
@@ -66,10 +68,6 @@ function safeClosestIndex(points: [number, number][], x: number) {
   return Math.abs(points[i0][0] - x) <= Math.abs(points[i1][0] - x) ? i0 : i1;
 }
 
-function clamp(n: number, min: number, max: number) {
-  return Math.min(max, Math.max(min, n));
-}
-
 function FlightDetailsRoute() {
   const token = useAuthStore((s) => s.token);
   const { id } = Route.useParams();
@@ -85,6 +83,9 @@ function FlightDetailsRoute() {
   // ✅ Sync toggle (Zoom + Tooltip sync)
   const [syncZoom, setSyncZoom] = React.useState(true);
 
+  // ✅ Zeitfenster (gemeinsamer State) in %
+  const [rangePct, setRangePct] = React.useState<[number, number]>([0, 100]);
+
   // ✅ Chart refs
   const altRef = React.useRef<EChartsReactType | null>(null);
   const varioRef = React.useRef<EChartsReactType | null>(null);
@@ -99,6 +100,16 @@ function FlightDetailsRoute() {
   const containerRef = React.useRef<HTMLDivElement | null>(null);
   const draggingRef = React.useRef(false);
 
+  // ---- helper: clamp + normalize range
+  const setRangePctSafe = React.useCallback((r: [number, number]) => {
+    let a = Math.max(0, Math.min(100, r[0]));
+    let b = Math.max(0, Math.min(100, r[1]));
+    if (a > b) [a, b] = [b, a];
+    if (b - a < 1) b = Math.min(100, a + 1);
+    setRangePct([a, b]);
+  }, []);
+
+  // --- Splitter handlers ---
   const onDividerPointerDown = React.useCallback(
     (e: React.PointerEvent) => {
       if (!mapOpen) return;
@@ -141,28 +152,22 @@ function FlightDetailsRoute() {
     const fixes = parseIgcFixes(flight.igcContent, flight.flightDate);
     const { series, windows } = buildFlightSeries(fixes, windowSec);
 
-    const step = 3; // <— hier steuerst du Performance
+    const step = 3;
 
-    // Leaflet points: [lat, lon]
     const rawPoints: LatLngTuple[] = fixes.map((f) => [f.lat, f.lon]);
 
-    // Vario pro Segment (Fix i -> i+1)
     const rawVario: number[] = [];
     for (let i = 0; i < fixes.length - 1; i++) {
       const dt = fixes[i + 1].tSec - fixes[i].tSec;
       const da = fixes[i + 1].altitudeM - fixes[i].altitudeM;
-
-      // dt kann bei kaputten Logs 0 sein -> clamp
       rawVario.push(da / Math.max(0.5, dt));
     }
 
-    // Sampling konsistent
     const mapPoints = sampleEveryNth(rawPoints, step);
     const mapVario = sampleEveryNth(rawVario, step);
 
     return { fixesCount: fixes.length, series, windows, mapPoints, mapVario };
   }, [flight?.igcContent, flight?.flightDate, windowSec]);
-
 
   React.useEffect(() => {
     let cancelled = false;
@@ -208,7 +213,7 @@ function FlightDetailsRoute() {
     return () => window.clearTimeout(t);
   }, [mapOpen, splitPct]);
 
-  // ---- Build chart data (arrays are fastest for ECharts) ----
+  // ---- Build chart data ----
   const chartData = React.useMemo(() => {
     if (!computed) return null;
 
@@ -229,7 +234,7 @@ function FlightDetailsRoute() {
 
     const altValues = alt.map((p) => p[1]);
     const altMin = Math.min(...altValues);
-    const altMax = Math.max(...altValues)
+    const altMax = Math.max(...altValues);
 
     return { alt, hSpeed, vSpeed, vUp, vDown, maxT, altMin, altMax };
   }, [computed]);
@@ -243,9 +248,16 @@ function FlightDetailsRoute() {
     background-color:#999;
   "></span>`;
 
-  // ---- Options ----
+  // ✅ alt chart should show window based on rangePct
   const altOption = React.useMemo(() => {
     if (!chartData) return {};
+
+    const [rp0, rp1] = rangePct;
+
+    const [winStartPct, winEndPct] = rangePct;
+    const winStartSec = (chartData.maxT * winStartPct) / 100;
+    const winEndSec = (chartData.maxT * winEndPct) / 100;
+
     return {
       animation: false,
       grid: { left: 56, right: 16, top: 24, bottom: 40 },
@@ -288,8 +300,14 @@ function FlightDetailsRoute() {
           zoomOnMouseWheel: true,
           moveOnMouseMove: true,
           moveOnMouseWheel: true,
+
         },
-        { type: "slider", xAxisIndex: 0, height: 20, bottom: 8 },
+        {
+          type: "slider",
+          xAxisIndex: 0,
+          height: 20,
+          bottom: 8,
+        },
       ],
       series: [
         {
@@ -299,11 +317,29 @@ function FlightDetailsRoute() {
           showSymbol: false,
           sampling: "lttb",
           lineStyle: { width: 2 },
+
+          // ✅ farbiger Bereich (Zeitfenster)
+          markArea: {
+            silent: true, // wichtig: nur Anzeige, kein Hover-Kram
+            itemStyle: {
+              color: "rgba(59, 130, 246, 0.15)", // blau-transparent (Tailwind blue-500-ish)
+            },
+            data: [[{ xAxis: winStartSec }, { xAxis: winEndSec }]],
+          },
+
+          // ✅ optional: klare Grenzen links/rechts
+          markLine: {
+            silent: true,
+            symbol: ["none", "none"],
+            lineStyle: { type: "solid", width: 1, opacity: 0.55 },
+            data: [{ xAxis: winStartSec }, { xAxis: winEndSec }],
+          },
         },
       ],
     };
-  }, [chartData, timeMarker]);
+  }, [chartData, timeMarker, rangePct]);
 
+  // keep your vario/speed as-is
   const varioOption = React.useMemo(() => {
     if (!chartData) return {};
     return {
@@ -443,23 +479,38 @@ function FlightDetailsRoute() {
     };
   }, [chartData, syncZoom, timeMarker]);
 
-  // ---- Altitude events drive (a) Zoom sync, (b) Tooltip sync ----
+  // ---- Altitude events: now also update rangePct when user drags window ----
   const altEvents = React.useMemo(() => {
     return {
       dataZoom: () => {
-        if (!syncZoom) return;
         if (syncingRef.current) return;
 
         const alt = altRef.current?.getEchartsInstance?.();
-        const vario = varioRef.current?.getEchartsInstance?.();
-        const speed = speedRef.current?.getEchartsInstance?.();
-        if (!alt || !vario || !speed) return;
+        if (!alt) return;
 
+        // read current zoom window (percent)
         const dzs = alt.getOption()?.dataZoom as any[] | undefined;
         if (!dzs?.length) return;
 
-        const dz = dzs.find((z) => z.type === "slider") ?? dzs.find((z) => z.type === "inside") ?? dzs[0];
+        const dz =
+          dzs.find((z) => z.type === "slider") ??
+          dzs.find((z) => z.type === "inside") ??
+          dzs[0];
+
         if (!dz) return;
+
+        // ✅ update state window from chart interaction
+        if (typeof dz.start === "number" && typeof dz.end === "number") {
+          // avoid tiny jitter loops
+          setRangePctSafe([dz.start, dz.end]);
+        }
+
+        // ✅ keep your existing syncZoom behavior (Altitude drives others)
+        if (!syncZoom) return;
+
+        const vario = varioRef.current?.getEchartsInstance?.();
+        const speed = speedRef.current?.getEchartsInstance?.();
+        if (!vario || !speed) return;
 
         try {
           syncingRef.current = true;
@@ -542,7 +593,7 @@ function FlightDetailsRoute() {
         }
       },
     };
-  }, [syncZoom, chartData]);
+  }, [syncZoom, chartData, setRangePctSafe]);
 
   return (
     <Box p="md">
@@ -565,10 +616,8 @@ function FlightDetailsRoute() {
             <Button leftSection={<IconX size={16} />} variant="light" onClick={() => setMapOpen(false)}>
               Map close
             </Button>
-
-
-
           )}
+
           <Checkbox
             label="Topo"
             checked={baseMap === "topo"}
@@ -627,7 +676,7 @@ function FlightDetailsRoute() {
                     <Stack gap="xs">
                       <Box>
                         <Text size="sm" fw={600} mb={4}>
-                          Altitude
+                          Altitude (Zeitfenster ziehbar)
                         </Text>
                         <EChartsReact
                           echarts={echarts}
@@ -705,13 +754,14 @@ function FlightDetailsRoute() {
                         Map
                       </Text>
 
-                      {/* IMPORTANT: Map should fill remaining height */}
                       <Box style={{ flex: 1, minHeight: 0 }}>
                         <FlightMap
                           points={computed?.mapPoints ?? []}
                           vario={computed?.mapVario}
                           baseMap={baseMap}
                           watchKey={`${mapOpen}-${splitPct}-${baseMap}`}
+                          rangePct={rangePct}
+                          onRangePctChange={setRangePctSafe}
                         />
                       </Box>
                     </Box>

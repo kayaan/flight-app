@@ -22,28 +22,15 @@ function formatTime(sec: number) {
     const m = Math.floor((s % 3600) / 60);
     const r = s % 60;
 
-    if (h > 0) {
-        return `${h}:${String(m).padStart(2, "0")}:${String(r).padStart(2, "0")}`;
-    }
+    if (h > 0) return `${h}:${String(m).padStart(2, "0")}:${String(r).padStart(2, "0")}`;
     return `${m}:${String(r).padStart(2, "0")}`;
 }
 
-
-/**
- * Linie + Halo abhängig vom Zoom, damit beim Rauszoomen nicht "alles weiß" wird.
- */
 function weightsForZoom(z: number) {
-    // z klein (rausgezoomt) => dickere Linie
-    const line = clamp(7.0 - z * 0.45, 2.2, 4.5); // z=9 -> ~3.0, z=12 -> ~2.6, z=15 -> ~2.2
-    const shadow = clamp(line + 4.0 - (z - 10) * 0.8, 2.0, 6.5); // z klein => shadow größer
-    const shadowOpacity = z <= 11 ? 0.85 : 0.55; // rauszoom: kräftiger
-    return { line, shadow, shadowOpacity };
+    const line = clamp(7.0 - z * 0.45, 2.2, 4.5);
+    return { line };
 }
 
-
-/**
- * Invalidates map size on open/resize (splitter, panels, etc.)
- */
 function MapAutoResize({ watchKey }: { watchKey?: unknown }) {
     const map = useMap();
 
@@ -68,10 +55,6 @@ function MapAutoResize({ watchKey }: { watchKey?: unknown }) {
     return null;
 }
 
-/**
- * Reads Leaflet zoom level and reports it upward.
- * MUST be rendered inside <MapContainer>.
- */
 function ZoomWatcher({ onZoom }: { onZoom: (z: number) => void }) {
     useMapEvents({
         zoomend: (e) => onZoom(e.target.getZoom()),
@@ -99,11 +82,18 @@ export function FlightMap({
     vario,
     watchKey,
     baseMap = "osm",
+
+    // ✅ controlled window from parent
+    rangePct,
+    onRangePctChange,
 }: {
     points: LatLngTuple[];
     vario?: number[];
     watchKey?: unknown;
     baseMap?: BaseMap;
+
+    rangePct: [number, number];
+    onRangePctChange: (r: [number, number]) => void;
 }) {
     const totalPoints = points.length;
     const hasTrack = totalPoints >= 2;
@@ -111,61 +101,41 @@ export function FlightMap({
     const initialZoom = hasTrack ? 13 : 11;
     const [zoom, setZoom] = React.useState<number>(initialZoom);
 
-    const setZoomExplicit = (z: number): void => {
-        setZoom(z);
-        console.warn(z);
-    }
-
     const totalSeconds = Math.max(0, totalPoints - 1);
 
-    // Zeitfenster als Range in %
-    const [rangePct, setRangePct] = React.useState<[number, number]>([0, 100]);
-
-    // Freeze / window-lock
+    // Freeze / window-lock (bleibt lokal in map)
     const [freezeWindow, setFreezeWindow] = React.useState(false);
-
-    // für Freeze-Mode: Position des Fensters (Start in %)
     const [windowStartPct, setWindowStartPct] = React.useState(0);
 
-    // Nur beim EINSCHALTEN initialisieren (sonst ruckelt's)
     React.useEffect(() => {
         if (!freezeWindow) return;
         setWindowStartPct(rangePct[0]);
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [freezeWindow]);
 
-    // Normalisieren: start <= end
     const [startPctRaw, endPctRaw] = rangePct;
     const startPct = Math.min(startPctRaw, endPctRaw);
     const endPct = Math.max(startPctRaw, endPctRaw);
 
-    // Für Freeze: Breite einfrieren
     const windowWidthPct = Math.max(1, endPct - startPct);
 
     const effectiveRange: [number, number] = React.useMemo(() => {
         if (!freezeWindow) return [startPct, endPct];
-
         const maxStart = 100 - windowWidthPct;
         const s = clamp(windowStartPct, 0, maxStart);
         const e = s + windowWidthPct;
         return [s, e];
     }, [freezeWindow, startPct, endPct, windowStartPct, windowWidthPct]);
 
-    // Wenn Freeze aktiv, halte rangePct synchron — aber ohne Update-Loop/Jitter
     React.useEffect(() => {
         if (!freezeWindow) return;
-
-        setRangePct((prev) => {
-            if (prev[0] === effectiveRange[0] && prev[1] === effectiveRange[1]) return prev;
-            return effectiveRange;
-        });
+        onRangePctChange(effectiveRange);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [freezeWindow, effectiveRange]);
 
-    // Sekundenanzeige aus effectiveRange (immer korrekt)
     const startSeconds = Math.floor((effectiveRange[0] / 100) * totalSeconds);
     const endSeconds = Math.floor((effectiveRange[1] / 100) * totalSeconds);
 
-    // Indizes aus effectiveRange
     const { startIdx, endIdx } = React.useMemo(() => {
         if (totalPoints < 2) return { startIdx: 0, endIdx: 0 };
 
@@ -189,70 +159,45 @@ export function FlightMap({
         return points.slice(startIdx, endIdx + 1);
     }, [points, startIdx, endIdx, totalPoints]);
 
-    // BUGFIX: vario muss mit startIdx offset gesliced werden (sonst Farben falsch bei start>0)
     const clippedVario = React.useMemo(() => {
         if (!vario) return undefined;
         const segCount = Math.max(0, clippedPoints.length - 1);
         return vario.slice(startIdx, startIdx + segCount);
     }, [vario, startIdx, clippedPoints.length]);
 
-
-
-    /**
-     * Segmente immer aus POINTS ableiten (points.length-1),
-     * vario optional: wenn zu kurz/undefined -> neutral (0).
-     */
-
-
     const segments = React.useMemo(() => {
         const varioColorStep = (v: number) => {
             const a = Math.abs(v);
-
             const neutralThreshold = zoom >= 14 ? 0.25 : 0.5;
-
             if (a < neutralThreshold) return "#60a5fa";
 
-            // 3 Stufen: 1–2, 2–4, >=4
             const level = a < 2 ? 1 : a < 3 ? 2 : 3;
 
             if (v >= 0) {
-                // + (Steigen) — kräftiges Grün
-                if (level === 1) return "#4ade80"; // green-400 (hell, gut sichtbar)
-                if (level === 2) return "#22c55e"; // green-500
-                return "#15803d"; // green-700 (dunkel, sehr kontrastreich)
+                if (level === 1) return "#4ade80";
+                if (level === 2) return "#22c55e";
+                return "#15803d";
             } else {
-                // - (Sinken) — kräftiges Rot
-                if (level === 1) return "#f87171"; // red-400
-                if (level === 2) return "#ef4444"; // red-500
-                return "#991b1b"; // red-800
+                if (level === 1) return "#f87171";
+                if (level === 2) return "#ef4444";
+                return "#991b1b";
             }
-        }
+        };
 
-
-        const buildColoredSegments = (points: LatLngTuple[], vario?: number[]): ColoredSegment[] => {
-            const out: ColoredSegment[] = [];
-            if (points.length < 2) return out;
-
-            const n = points.length - 1;
-            for (let i = 0; i < n; i++) {
-                const v = vario?.[i] ?? 0;
-                out.push({
-                    positions: [points[i], points[i + 1]],
-                    color: varioColorStep(v),
-                });
-            }
-            return out;
-        }
-
+        const out: ColoredSegment[] = [];
         if (clippedPoints.length < 2) return null;
-        return buildColoredSegments(clippedPoints, clippedVario);
+
+        for (let i = 0; i < clippedPoints.length - 1; i++) {
+            out.push({
+                positions: [clippedPoints[i], clippedPoints[i + 1]],
+                color: varioColorStep(clippedVario?.[i] ?? 0),
+            });
+        }
+        return out;
     }, [clippedPoints, clippedVario, zoom]);
 
-    // fallback center (München)
     const fallbackCenter: LatLngTuple = [48.1372, 11.5756];
     const center = clippedPoints.length > 0 ? clippedPoints[0] : hasTrack ? points[0] : fallbackCenter;
-
-
 
     React.useEffect(() => {
         setZoom(initialZoom);
@@ -264,19 +209,15 @@ export function FlightMap({
     function clamp01(x: number) {
         return Math.min(1, Math.max(0, x));
     }
-
     function lerp(a: number, b: number, t: number) {
         return a + (b - a) * t;
     }
-
-    function getOutlineStyle(zoom: number) {
-        // 12 (weit) -> t=0, 15 (nah) -> t=1
-        const t = clamp01((zoom - 12) / 3);
-
+    function getOutlineStyle(z: number) {
+        const t = clamp01((z - 12) / 3);
         return {
             color: "#61616c",
-            extra: Math.round(lerp(1.5, 4.0, t)), // ✅ insgesamt stärker (vorher 1..3)
-            opacity: lerp(0.18, 0.72, t),         // ✅ näher: kräftiger, weit: dezent
+            extra: Math.round(lerp(1.5, 4.0, t)),
+            opacity: lerp(0.18, 0.72, t),
         };
     }
 
@@ -294,11 +235,7 @@ export function FlightMap({
                     </Text>
 
                     <Tooltip label={freezeWindow ? "Fenster entsperren" : "Fensterbreite einfrieren"}>
-                        <ActionIcon
-                            variant="light"
-                            onClick={() => setFreezeWindow((v) => !v)}
-                            aria-label="Freeze window"
-                        >
+                        <ActionIcon variant="light" onClick={() => setFreezeWindow((v) => !v)} aria-label="Freeze window">
                             {freezeWindow ? <IconLock size={16} /> : <IconLockOpen size={16} />}
                         </ActionIcon>
                     </Tooltip>
@@ -309,15 +246,14 @@ export function FlightMap({
                 value={rangePct}
                 onChange={(next) => {
                     if (freezeWindow) {
-                        // Breite bleibt fix, Block wird verschoben über den Start
                         const width = windowWidthPct;
                         const maxStart = 100 - width;
                         const s = clamp(next[0], 0, maxStart);
                         setWindowStartPct(s);
-                        setRangePct([s, s + width]);
+                        onRangePctChange([s, s + width]);
                         return;
                     }
-                    setRangePct(next);
+                    onRangePctChange(next);
                 }}
                 min={0}
                 max={100}
@@ -333,7 +269,12 @@ export function FlightMap({
                     </Text>
                     <Slider
                         value={windowStartPct}
-                        onChange={setWindowStartPct}
+                        onChange={(v) => {
+                            setWindowStartPct(v);
+                            const width = windowWidthPct;
+                            const s = clamp(v, 0, 100 - width);
+                            onRangePctChange([s, s + width]);
+                        }}
                         min={0}
                         max={100 - windowWidthPct}
                         step={1}
@@ -343,19 +284,9 @@ export function FlightMap({
             )}
 
             <Box style={{ flex: 1, minHeight: 0 }}>
-                <MapContainer
-                    center={center}
-                    zoom={initialZoom}
-                    style={{ height: "100%", width: "100%" }}
-                    preferCanvas
-                >
-                    <TileLayer
-                        key={tile.key}
-                        url={tile.url}
-                        attribution={tile.attribution}
-                    />
+                <MapContainer center={center} zoom={initialZoom} style={{ height: "100%", width: "100%" }} preferCanvas>
+                    <TileLayer key={tile.key} url={tile.url} attribution={tile.attribution} />
 
-                    {/* Colored route (CLIPPED!) */}
                     {segments?.map((seg, i) => (
                         <React.Fragment key={i}>
                             <Polyline
@@ -381,10 +312,9 @@ export function FlightMap({
                         </React.Fragment>
                     ))}
 
-                    {/* Fallback */}
                     {!segments && clippedPoints.length >= 2 && <Polyline positions={clippedPoints} />}
 
-                    <ZoomWatcher onZoom={setZoomExplicit} />
+                    <ZoomWatcher onZoom={setZoom} />
                     <MapAutoResize watchKey={watchKey} />
                 </MapContainer>
             </Box>
