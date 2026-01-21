@@ -188,7 +188,7 @@ function FlightDetailsRoute() {
     const fixes = parseIgcFixes(flight.igcContent, flight.flightDate);
     const { series, windows } = buildFlightSeries(fixes, windowSec);
 
-    const step = 3;
+    const step = 1;
 
     const rawPoints: LatLngTuple[] = fixes.map((f) => [f.lat, f.lon]);
 
@@ -575,6 +575,8 @@ function FlightDetailsRoute() {
 
         const x = e?.axesInfo?.[0]?.value;
         if (typeof x !== "number") return;
+
+
 
         const alt = altRef.current?.getEchartsInstance?.();
         const vario = varioRef.current?.getEchartsInstance?.();
