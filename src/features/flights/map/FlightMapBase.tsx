@@ -1,9 +1,8 @@
 import * as React from "react";
-import { MapContainer, TileLayer, Polyline, useMap, useMapEvents, CircleMarker } from "react-leaflet";
+import { MapContainer, TileLayer, Polyline, useMap, useMapEvents } from "react-leaflet";
 import type { LatLngTuple } from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { Box, Group, Text, RangeSlider } from "@mantine/core";
-
 
 type BaseMap = "osm" | "topo";
 
@@ -204,8 +203,6 @@ export function FlightMap({
     // ✅ controlled window from parent
     rangePct,
     onRangePctChange,
-
-    hoverPoint,
 }: {
     points: LatLngTuple[];
     vario?: number[];
@@ -214,8 +211,6 @@ export function FlightMap({
 
     rangePct: [number, number];
     onRangePctChange: (r: [number, number]) => void;
-
-    hoverPoint?: LatLngTuple | null;
 }) {
     const totalPoints = points.length;
     const hasTrack = totalPoints >= 2;
@@ -397,19 +392,6 @@ export function FlightMap({
                             />
                         </React.Fragment>
                     ))}
-
-                    {hoverPoint && (
-                        <CircleMarker
-                            center={hoverPoint}
-                            radius={6}
-                            pathOptions={{
-                                color: "#111",
-                                weight: 2,
-                                opacity: 0.9,
-                                fillOpacity: 0.9,
-                            }}
-                        />
-                    )}
 
                     {!segments && clippedPoints.length >= 2 && <Polyline positions={clippedPoints} />}
 
