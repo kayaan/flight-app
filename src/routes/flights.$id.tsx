@@ -103,6 +103,8 @@ function FlightDetailsRoute() {
   const token = useAuthStore((s) => s.token);
   const { id } = Route.useParams();
 
+  const [hoverPos, setHoverPos] = React.useState<LatLngTuple | null>(null);
+
   const [baseMap, setBaseMap] = React.useState<"osm" | "topo">("topo");
 
   const [flight, setFlight] = React.useState<FlightRecordDetails | null>(null);
@@ -201,8 +203,9 @@ function FlightDetailsRoute() {
 
     const mapPoints = sampleEveryNth(rawPoints, step);
     const mapVario = sampleEveryNth(rawVario, step);
+    const posByT = fixes.map((f) => [f.tSec, f.lat, f.lon] as [number, number, number]);
 
-    return { fixesCount: fixes.length, series, windows, mapPoints, mapVario };
+    return { fixesCount: fixes.length, series, windows, mapPoints, mapVario, posByT };
   }, [flight?.igcContent, flight?.flightDate, windowSec]);
 
   React.useEffect(() => {
@@ -287,8 +290,6 @@ function FlightDetailsRoute() {
   // ✅ alt chart should show window based on rangePct
   const altOption = React.useMemo(() => {
     if (!chartData) return {};
-
-    const [rp0, rp1] = rangePct;
 
     const [winStartPct, winEndPct] = rangePct;
     const winStartSec = (chartData.maxT * winStartPct) / 100;
@@ -578,6 +579,15 @@ function FlightDetailsRoute() {
         const x = e?.axesInfo?.[0]?.value;
         if (typeof x !== "number") return;
 
+        if (computed?.posByT?.length) {
+          const iP = safeClosestIndex(
+            computed.posByT.map((p) => [p[0], 0] as [number, number]), // nur tSec fürs Suchen
+            x
+          );
+          const p = computed.posByT[iP];
+          if (p) setHoverPos([p[1], p[2]]);
+        }
+
         const alt = altRef.current?.getEchartsInstance?.();
         const vario = varioRef.current?.getEchartsInstance?.();
         const speed = speedRef.current?.getEchartsInstance?.();
@@ -620,6 +630,9 @@ function FlightDetailsRoute() {
 
       globalout: () => {
         if (!syncZoom) return;
+
+        setHoverPos(null); // ✅ NEW
+
         for (const ch of [
           altRef.current?.getEchartsInstance?.(),
           varioRef.current?.getEchartsInstance?.(),
@@ -629,7 +642,7 @@ function FlightDetailsRoute() {
         }
       },
     };
-  }, [syncZoom, chartData, setRangePctSafe]);
+  }, [syncZoom, chartData, setRangePctSafe, computed?.posByT]);
 
   return (
     <Box p="md">
@@ -798,6 +811,7 @@ function FlightDetailsRoute() {
                           watchKey={`${mapOpen}-${splitPct}-${baseMap}`}
                           rangePct={rangePct}
                           onRangePctChange={setRangePctSafe}
+                          hoverPoint={hoverPos}   // ✅ NEW
                         />
                       </Box>
                     </Box>
