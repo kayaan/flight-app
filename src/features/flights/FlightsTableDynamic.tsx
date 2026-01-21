@@ -115,6 +115,9 @@ export function FlightsTableBareVirtual({
     >("all");
     const [verified, setVerified] = React.useState<"all" | "yes" | "no">("all");
 
+    // ✅ Hover-State (Row-Highlight)
+    const [hoveredId, setHoveredId] = React.useState<number | null>(null);
+
     const sortDir = useFlightsStore((s) => s.sortDir);
     const sortKey = useFlightsStore((s) => s.sortKey);
     const setSortDir = useFlightsStore((s) => s.setSortDir);
@@ -197,8 +200,6 @@ export function FlightsTableBareVirtual({
     }
 
     // ---- Grid widths (px) ----
-    // Must match your columns: ID, Date, Pilot, Glider, Time, Duration, Distance, MaxAlt, MinAlt,
-    // MaxClimb, MaxSink, AvgClimb, Fixes, Uploaded, Actions
     const COL_W = React.useMemo(
         () => [70, 110, 160, 160, 320, 110, 140, 120, 120, 140, 140, 140, 90, 190, 120],
         []
@@ -208,8 +209,6 @@ export function FlightsTableBareVirtual({
 
     // ---- Virtualizer ----
     const parentRef = React.useRef<HTMLDivElement | null>(null);
-
-    // Fixed row height for max speed; if you later allow wrapping, we can switch to measureElement.
     const EST_ROW_H = 40;
 
     const rowVirtualizer = useVirtualizer({
@@ -261,12 +260,23 @@ export function FlightsTableBareVirtual({
             document.documentElement.getAttribute("data-mantine-color-scheme")) ||
         "light";
 
-    // ✅ OPAKE Farben (keine rgba alpha!)
+    // ✅ Base row backgrounds (opak)
     const ROW_BG_ODD = "var(--mantine-color-body)";
     const ROW_BG_EVEN =
         scheme === "dark"
             ? "var(--mantine-color-dark-6)"
             : "var(--mantine-color-gray-0)";
+
+    // ✅ Hover backgrounds (opak, dezent)
+    const ROW_HOVER_BG =
+        scheme === "dark"
+            ? "var(--mantine-color-dark-5)"
+            : "var(--mantine-color-gray-1)";
+
+    function getRowBg(index: number, isHovered: boolean): string {
+        if (isHovered) return ROW_HOVER_BG;
+        return index % 2 === 0 ? ROW_BG_EVEN : ROW_BG_ODD;
+    }
 
     const actionsHeaderCell: React.CSSProperties = {
         ...cellHeader,
@@ -288,10 +298,11 @@ export function FlightsTableBareVirtual({
             borderRight: "none",
             justifyContent: "flex-end",
             gap: 6,
-            backgroundColor: bg, // ✅ opak
+            backgroundColor: bg, // ✅ muss der HOVER-BG sein, damit sticky spalte mitzieht
             boxShadow: "-10px 0 10px rgba(0,0,0,0.06)",
         };
     }
+
     return (
         <>
             <Group gap="sm" mb="sm" align="end">
@@ -457,7 +468,7 @@ export function FlightsTableBareVirtual({
                         <div style={actionsHeaderCell}>Actions</div>
                     </div>
 
-                    {/* Virtual body: height defines vertical scroll range */}
+                    {/* Virtual body */}
                     <div
                         style={{
                             position: "relative",
@@ -468,11 +479,14 @@ export function FlightsTableBareVirtual({
                     >
                         {rowVirtualizer.getVirtualItems().map((vrow) => {
                             const f = deferredRows[vrow.index];
-                            const bg = vrow.index % 2 === 0 ? ROW_BG_EVEN : ROW_BG_ODD;
+                            const isHovered = hoveredId === f.id;
+                            const bg = getRowBg(vrow.index, isHovered);
 
                             return (
                                 <div
                                     key={f.id}
+                                    onMouseEnter={() => setHoveredId(f.id)}
+                                    onMouseLeave={() => setHoveredId((cur) => (cur === f.id ? null : cur))}
                                     style={{
                                         position: "absolute",
                                         top: 0,
@@ -484,6 +498,8 @@ export function FlightsTableBareVirtual({
                                         height: vrow.size,
                                         borderBottom: "1px solid rgba(0,0,0,0.06)",
                                         backgroundColor: bg,
+                                        transition: "background-color 120ms ease",
+                                        cursor: "default",
                                     }}
                                 >
                                     <div style={cell}>{f.id}</div>
@@ -512,7 +528,9 @@ export function FlightsTableBareVirtual({
                                         <ActionIcon
                                             variant="light"
                                             aria-label="Details"
-                                            onClick={() => navigate({ to: "/flights/$id", params: { id: String(f.id) } })}
+                                            onClick={() =>
+                                                navigate({ to: "/flights/$id", params: { id: String(f.id) } })
+                                            }
                                         >
                                             <IconEye size={16} />
                                         </ActionIcon>
@@ -528,7 +546,6 @@ export function FlightsTableBareVirtual({
                                             <IconTrash size={16} />
                                         </ActionIcon>
                                     </div>
-
                                 </div>
                             );
                         })}

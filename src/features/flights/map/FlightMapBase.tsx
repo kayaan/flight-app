@@ -28,27 +28,6 @@ function formatTime(sec: number) {
     return `${m}:${String(r).padStart(2, "0")}`;
 }
 
-function varioColorStep(v: number) {
-    const a = Math.abs(v);
-
-    // Neutralzone
-    if (a < 1) return "rgba(60,60,60,0.5)"; // halbtransparentes Grau
-
-    // 3 Stufen: 1–2, 2–4, >=4
-    const level = a < 2 ? 1 : a < 4 ? 2 : 3;
-
-    if (v >= 0) {
-        // + (Steigen) — kräftiges Grün
-        if (level === 1) return "#4ade80"; // green-400 (hell, gut sichtbar)
-        if (level === 2) return "#22c55e"; // green-500
-        return "#15803d"; // green-700 (dunkel, sehr kontrastreich)
-    } else {
-        // - (Sinken) — kräftiges Rot
-        if (level === 1) return "#f87171"; // red-400
-        if (level === 2) return "#ef4444"; // red-500
-        return "#991b1b"; // red-800
-    }
-}
 
 /**
  * Linie + Halo abhängig vom Zoom, damit beim Rauszoomen nicht "alles weiß" wird.
@@ -61,24 +40,6 @@ function weightsForZoom(z: number) {
     return { line, shadow, shadowOpacity };
 }
 
-/**
- * Segmente immer aus POINTS ableiten (points.length-1),
- * vario optional: wenn zu kurz/undefined -> neutral (0).
- */
-function buildColoredSegments(points: LatLngTuple[], vario?: number[]): ColoredSegment[] {
-    const out: ColoredSegment[] = [];
-    if (points.length < 2) return out;
-
-    const n = points.length - 1;
-    for (let i = 0; i < n; i++) {
-        const v = vario?.[i] ?? 0;
-        out.push({
-            positions: [points[i], points[i + 1]],
-            color: varioColorStep(v),
-        });
-    }
-    return out;
-}
 
 /**
  * Invalidates map size on open/resize (splitter, panels, etc.)
@@ -146,6 +107,14 @@ export function FlightMap({
 }) {
     const totalPoints = points.length;
     const hasTrack = totalPoints >= 2;
+
+    const initialZoom = hasTrack ? 13 : 11;
+    const [zoom, setZoom] = React.useState<number>(initialZoom);
+
+    const setZoomExplicit = (z: number): void => {
+        setZoom(z);
+        console.warn(z);
+    }
 
     const totalSeconds = Math.max(0, totalPoints - 1);
 
@@ -227,17 +196,63 @@ export function FlightMap({
         return vario.slice(startIdx, startIdx + segCount);
     }, [vario, startIdx, clippedPoints.length]);
 
+
+
+    /**
+     * Segmente immer aus POINTS ableiten (points.length-1),
+     * vario optional: wenn zu kurz/undefined -> neutral (0).
+     */
+
+
     const segments = React.useMemo(() => {
+        const varioColorStep = (v: number) => {
+            const a = Math.abs(v);
+
+            const neutralThreshold = zoom >= 14 ? 0.25 : 0.5;
+
+            if (a < neutralThreshold) return "#60a5fa";
+
+            // 3 Stufen: 1–2, 2–4, >=4
+            const level = a < 2 ? 1 : a < 3 ? 2 : 3;
+
+            if (v >= 0) {
+                // + (Steigen) — kräftiges Grün
+                if (level === 1) return "#4ade80"; // green-400 (hell, gut sichtbar)
+                if (level === 2) return "#22c55e"; // green-500
+                return "#15803d"; // green-700 (dunkel, sehr kontrastreich)
+            } else {
+                // - (Sinken) — kräftiges Rot
+                if (level === 1) return "#f87171"; // red-400
+                if (level === 2) return "#ef4444"; // red-500
+                return "#991b1b"; // red-800
+            }
+        }
+
+
+        const buildColoredSegments = (points: LatLngTuple[], vario?: number[]): ColoredSegment[] => {
+            const out: ColoredSegment[] = [];
+            if (points.length < 2) return out;
+
+            const n = points.length - 1;
+            for (let i = 0; i < n; i++) {
+                const v = vario?.[i] ?? 0;
+                out.push({
+                    positions: [points[i], points[i + 1]],
+                    color: varioColorStep(v),
+                });
+            }
+            return out;
+        }
+
         if (clippedPoints.length < 2) return null;
         return buildColoredSegments(clippedPoints, clippedVario);
-    }, [clippedPoints, clippedVario]);
+    }, [clippedPoints, clippedVario, zoom]);
 
     // fallback center (München)
     const fallbackCenter: LatLngTuple = [48.1372, 11.5756];
     const center = clippedPoints.length > 0 ? clippedPoints[0] : hasTrack ? points[0] : fallbackCenter;
 
-    const initialZoom = hasTrack ? 13 : 11;
-    const [zoom, setZoom] = React.useState<number>(initialZoom);
+
 
     React.useEffect(() => {
         setZoom(initialZoom);
@@ -245,6 +260,28 @@ export function FlightMap({
 
     const { line } = React.useMemo(() => weightsForZoom(zoom), [zoom]);
     const tile = TILE[baseMap];
+
+    function clamp01(x: number) {
+        return Math.min(1, Math.max(0, x));
+    }
+
+    function lerp(a: number, b: number, t: number) {
+        return a + (b - a) * t;
+    }
+
+    function getOutlineStyle(zoom: number) {
+        // 12 (weit) -> t=0, 15 (nah) -> t=1
+        const t = clamp01((zoom - 12) / 3);
+
+        return {
+            color: "#61616c",
+            extra: Math.round(lerp(1.5, 4.0, t)), // ✅ insgesamt stärker (vorher 1..3)
+            opacity: lerp(0.18, 0.72, t),         // ✅ näher: kräftiger, weit: dezent
+        };
+    }
+
+    const { color: OUTLINE, extra, opacity: outlineOpacity } = getOutlineStyle(zoom);
+    const outlineWeight = line + extra;
 
     return (
         <Box style={{ display: "flex", flexDirection: "column", height: "100%" }}>
@@ -312,25 +349,42 @@ export function FlightMap({
                     style={{ height: "100%", width: "100%" }}
                     preferCanvas
                 >
-                    <TileLayer key={tile.key} url={tile.url} attribution={tile.attribution} />
+                    <TileLayer
+                        key={tile.key}
+                        url={tile.url}
+                        attribution={tile.attribution}
+                    />
 
                     {/* Colored route (CLIPPED!) */}
                     {segments?.map((seg, i) => (
-                        <Polyline
-                            key={i}
-                            positions={seg.positions}
-                            pathOptions={{
-                                color: seg.color,
-                                weight: line,
-                                opacity: 0.98,
-                            }}
-                        />
+                        <React.Fragment key={i}>
+                            <Polyline
+                                positions={seg.positions}
+                                pathOptions={{
+                                    color: OUTLINE,
+                                    weight: outlineWeight,
+                                    opacity: outlineOpacity,
+                                    lineCap: "round",
+                                    lineJoin: "round",
+                                }}
+                            />
+                            <Polyline
+                                positions={seg.positions}
+                                pathOptions={{
+                                    color: seg.color,
+                                    weight: line,
+                                    opacity: 0.98,
+                                    lineCap: "round",
+                                    lineJoin: "round",
+                                }}
+                            />
+                        </React.Fragment>
                     ))}
 
                     {/* Fallback */}
                     {!segments && clippedPoints.length >= 2 && <Polyline positions={clippedPoints} />}
 
-                    <ZoomWatcher onZoom={setZoom} />
+                    <ZoomWatcher onZoom={setZoomExplicit} />
                     <MapAutoResize watchKey={watchKey} />
                 </MapContainer>
             </Box>
