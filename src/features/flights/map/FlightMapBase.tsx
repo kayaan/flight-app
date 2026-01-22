@@ -1,6 +1,13 @@
 import * as React from "react";
-import { MapContainer, TileLayer, Polyline, useMap, useMapEvents } from "react-leaflet";
-import type { LatLngTuple } from "leaflet";
+import {
+    MapContainer,
+    TileLayer,
+    Polyline,
+    useMap,
+    useMapEvents,
+    Marker,
+} from "react-leaflet";
+import type { LatLngTuple, Marker as LeafletMarker } from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { Box, Group, Text, RangeSlider } from "@mantine/core";
 
@@ -9,6 +16,17 @@ type BaseMap = "osm" | "topo";
 type ColoredSegment = {
     positions: [LatLngTuple, LatLngTuple];
     color: string;
+};
+
+// 🔹 Handle für imperatives Setzen der Hover-Zeit
+export type FlightMapHandle = {
+    setHoverTSec: (tSec: number | null) => void;
+};
+
+type FixPoint = {
+    tSec: number;
+    lat: number;
+    lon: number;
 };
 
 function clamp(n: number, min: number, max: number) {
@@ -65,7 +83,8 @@ const TILE = {
     osm: {
         key: "osm",
         url: "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
-        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+        attribution:
+            '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
     },
     topo: {
         key: "topo",
@@ -75,13 +94,8 @@ const TILE = {
     },
 } as const;
 
-/**
- * RangeSlider, aber zusätzlich:
- * - Drag auf dem Track/“Fenster” verschiebt die Range als Ganzes (Breite bleibt gleich)
- * - Handles bleiben normal zum Resizen
- *
- * Wichtig: Wir fangen Pointer-Events auf dem Root ab und prüfen, ob das Ziel im Slider liegt.
- */
+/* ---------------- WindowRangeSlider bleibt unverändert ---------------- */
+
 function WindowRangeSlider({
     value,
     onChange,
@@ -123,13 +137,9 @@ function WindowRangeSlider({
         const wrap = wrapRef.current;
         if (!wrap) return;
 
-        // Thumbs -> Mantine soll normal arbeiten (Resize)
         if (target.closest(".ws-thumb")) return;
-
-        // Drag nur wenn auf der selektierten Bar geklickt wird (nicht Track!)
         if (!target.closest(".ws-bar")) return;
 
-        // Mantine darf KEINEN Klick sehen (sonst Jump)
         e.preventDefault();
         e.stopPropagation();
 
@@ -152,7 +162,6 @@ function WindowRangeSlider({
 
         const width = startValue.current[1] - startValue.current[0];
 
-        // step-runden
         const rawStart = startValue.current[0] + dxValue;
         const steppedStart = Math.round(rawStart / step) * step;
 
@@ -181,7 +190,6 @@ function WindowRangeSlider({
                 step={step}
                 minRange={minRange}
                 mb={mb}
-                // ✅ garantiert passende Klassen (KEIN "mantine-..." Raten mehr)
                 classNames={{
                     root: "ws-root",
                     track: "ws-track",
@@ -193,30 +201,62 @@ function WindowRangeSlider({
     );
 }
 
+/* ---------------- FlightMap mit imperativem Hover ---------------- */
 
-export function FlightMap({
-    points,
-    vario,
-    watchKey,
-    baseMap = "osm",
+export const FlightMap = React.forwardRef<
+    FlightMapHandle,
+    {
+        points: LatLngTuple[];
+        vario?: number[];
+        watchKey?: unknown;
+        baseMap?: BaseMap;
 
-    // ✅ controlled window from parent
-    rangePct,
-    onRangePctChange,
-}: {
-    points: LatLngTuple[];
-    vario?: number[];
-    watchKey?: unknown;
-    baseMap?: BaseMap;
+        rangePct: [number, number];
+        onRangePctChange: (r: [number, number]) => void;
 
-    rangePct: [number, number];
-    onRangePctChange: (r: [number, number]) => void;
-}) {
+        // 🔹 NEU: volle Fix-Liste für tSec → LatLng Lookup
+        fixes: FixPoint[];
+    }
+>(function FlightMap(
+    {
+        points,
+        vario,
+        watchKey,
+        baseMap = "osm",
+        rangePct,
+        onRangePctChange,
+        fixes,
+    },
+    ref
+) {
+    /* --------- Hover-Infra (kein React-State) --------- */
+
+    const markerRef = React.useRef<LeafletMarker | null>(null);
+    const fixBySecRef = React.useRef<Map<number, LatLngTuple>>(new Map());
+    const lastSecRef = React.useRef<number | null>(null);
+
+    React.useEffect(() => {
+        const m = new Map<number, LatLngTuple>();
+        for (const f of fixes) m.set(f.tSec, [f.lat, f.lon]);
+        fixBySecRef.current = m;
+    }, [fixes]);
+
+    React.useImperativeHandle(ref, () => ({
+        setHoverTSec: (tSec) => {
+            if (tSec == null) return;
+            if (lastSecRef.current === tSec) return; // ✅ Map prüft selbst
+            lastSecRef.current = tSec;
+
+            const pos = fixBySecRef.current.get(tSec);
+            if (!pos) return;
+            markerRef.current?.setLatLng(pos);
+        },
+    }));
+
+    /* --------- Dein bestehender Code --------- */
+
     const totalPoints = points.length;
     const hasTrack = totalPoints >= 2;
-
-
-
 
     const initialZoom = hasTrack ? 13 : 11;
     const [zoom, setZoom] = React.useState<number>(initialZoom);
@@ -231,8 +271,16 @@ export function FlightMap({
     const { startIdx, endIdx } = React.useMemo(() => {
         if (totalPoints < 2) return { startIdx: 0, endIdx: 0 };
 
-        const s = clamp(Math.floor((effectiveRange[0] / 100) * (totalPoints - 1)), 0, totalPoints - 2);
-        const e = clamp(Math.floor((effectiveRange[1] / 100) * (totalPoints - 1)), s + 1, totalPoints - 1);
+        const s = clamp(
+            Math.floor((effectiveRange[0] / 100) * (totalPoints - 1)),
+            0,
+            totalPoints - 2
+        );
+        const e = clamp(
+            Math.floor((effectiveRange[1] / 100) * (totalPoints - 1)),
+            s + 1,
+            totalPoints - 1
+        );
 
         return { startIdx: s, endIdx: e };
     }, [effectiveRange, totalPoints]);
@@ -280,7 +328,12 @@ export function FlightMap({
     }, [clippedPoints, clippedVario, zoom]);
 
     const fallbackCenter: LatLngTuple = [48.1372, 11.5756];
-    const center = clippedPoints.length > 0 ? clippedPoints[0] : hasTrack ? points[0] : fallbackCenter;
+    const center =
+        clippedPoints.length > 0
+            ? clippedPoints[0]
+            : hasTrack
+                ? points[0]
+                : fallbackCenter;
 
     React.useEffect(() => {
         setZoom(initialZoom);
@@ -288,11 +341,9 @@ export function FlightMap({
 
     const { line } = React.useMemo(() => weightsForZoom(zoom), [zoom]);
 
-    // dezent: ganze Route
     const ghostColor = "rgba(120,120,130,0.55)";
     const ghostOutlineColor = "rgba(20,20,25,0.20)";
 
-    // etwas dünner als die aktive Route
     const ghostLine = Math.max(1.6, line * 0.75);
     const ghostOutline = ghostLine + 2;
 
@@ -316,17 +367,19 @@ export function FlightMap({
     const { color: OUTLINE, extra, opacity: outlineOpacity } = getOutlineStyle(zoom);
     const outlineWeight = line + extra;
 
+    const startPos: LatLngTuple = center;
+
     return (
         <Box style={{ display: "flex", flexDirection: "column", height: "100%" }}>
             <Group justify="space-between" mb="xs">
                 <Text fw={600}>Zeitfenster</Text>
 
                 <Text c="dimmed">
-                    {formatTime(startSeconds)} → {formatTime(endSeconds)} / {formatTime(totalSeconds)}
+                    {formatTime(startSeconds)} → {formatTime(endSeconds)} /{" "}
+                    {formatTime(totalSeconds)}
                 </Text>
             </Group>
 
-            {/* ✅ Window Slider: Handles = resize, Drag in the middle = move */}
             <WindowRangeSlider
                 value={rangePct}
                 onChange={onRangePctChange}
@@ -338,13 +391,16 @@ export function FlightMap({
             />
 
             <Box style={{ flex: 1, minHeight: 0 }}>
-                <MapContainer center={center} zoom={initialZoom} style={{ height: "100%", width: "100%" }} preferCanvas>
+                <MapContainer
+                    center={center}
+                    zoom={initialZoom}
+                    style={{ height: "100%", width: "100%" }}
+                    preferCanvas
+                >
                     <TileLayer key={tile.key} url={tile.url} attribution={tile.attribution} />
-
 
                     {points.length >= 2 && (
                         <>
-                            {/* optional mini-outline, damit es auch auf hellen Tiles sichtbar bleibt */}
                             <Polyline
                                 positions={points}
                                 pathOptions={{
@@ -393,7 +449,17 @@ export function FlightMap({
                         </React.Fragment>
                     ))}
 
-                    {!segments && clippedPoints.length >= 2 && <Polyline positions={clippedPoints} />}
+                    {!segments && clippedPoints.length >= 2 && (
+                        <Polyline positions={clippedPoints} />
+                    )}
+
+                    {/* 🔹 Hover Marker */}
+                    <Marker
+                        position={startPos}
+                        ref={(m) => {
+                            markerRef.current = m as unknown as LeafletMarker;
+                        }}
+                    />
 
                     <ZoomWatcher onZoom={setZoom} />
                     <MapAutoResize watchKey={watchKey} />
@@ -401,4 +467,4 @@ export function FlightMap({
             </Box>
         </Box>
     );
-}
+});

@@ -1,7 +1,7 @@
 import * as React from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { Box, Stack, Text, Alert, Button, Group, Checkbox } from "@mantine/core";
-import { IconAlertCircle } from "@tabler/icons-react";
+import { IconAlertCircle, IconMap, IconX } from "@tabler/icons-react";
 import type { EChartsReact as EChartsReactType } from "echarts-for-react";
 import EChartsReact from "echarts-for-react";
 import * as echarts from "echarts";
@@ -11,23 +11,21 @@ import { buildFlightSeries, calculationWindow, parseIgcFixes } from "../features
 import { useAuthStore } from "../features/auth/store/auth.store";
 import { flightApi } from "../features/flights/flights.api";
 
-import { FlightMap } from "../features/flights/map/FlightMapBase";
+import { FlightMap, type FlightMapHandle } from "../features/flights/map/FlightMapBase";
 import type { LatLngTuple } from "leaflet";
-import { IconMap, IconX } from "@tabler/icons-react";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 export const Route = createFileRoute("/flights/$id")({
   component: FlightDetailsRoute,
 });
+
 const LS_KEY = "flyapp.flightDetails.layout.v1";
 
 type LayoutPrefs = {
   mapOpen: boolean;
   splitPct: number;
 };
-
-
 
 function loadLayoutPrefs(): LayoutPrefs {
   try {
@@ -48,7 +46,7 @@ function saveLayoutPrefs(p: LayoutPrefs) {
   try {
     localStorage.setItem(LS_KEY, JSON.stringify(p));
   } catch {
-    // ignore (private mode etc.)
+    // ignore
   }
 }
 
@@ -71,10 +69,10 @@ function clamp(n: number, min: number, max: number) {
 
 function varioColor(v: number) {
   const max = 7;
-  const t = clamp01(Math.abs(v) / max); // 0..1
-  const hue = v >= 0 ? 120 : 0; // grün / rot
-  const sat = 35 + t * 45; // 35% -> 80%
-  const light = 78 - t * 45; // 78% -> 33%
+  const t = clamp01(Math.abs(v) / max);
+  const hue = v >= 0 ? 120 : 0;
+  const sat = 35 + t * 45;
+  const light = 78 - t * 45;
   return `hsl(${hue}, ${sat}%, ${light}%)`;
 }
 
@@ -111,21 +109,22 @@ function FlightDetailsRoute() {
 
   const [windowSec] = React.useState(calculationWindow);
 
-  // ✅ Sync toggle (Zoom + Tooltip sync)
   const [syncZoom, setSyncZoom] = React.useState(true);
-
-  // ✅ Zeitfenster (gemeinsamer State) in %
   const [rangePct, setRangePct] = React.useState<[number, number]>([0, 100]);
 
-  // ✅ Chart refs
   const altRef = React.useRef<EChartsReactType | null>(null);
   const varioRef = React.useRef<EChartsReactType | null>(null);
   const speedRef = React.useRef<EChartsReactType | null>(null);
 
-  // ✅ Prevent recursion / event loops
   const syncingRef = React.useRef(false);
 
-  // ✅ Map panel + splitter
+  // ✅ Map handle (imperativ)
+  const mapRef = React.useRef<FlightMapHandle | null>(null);
+
+  // ✅ rAF throttle for hover -> map
+  const hoverRafRef = React.useRef<number | null>(null);
+  const pendingHoverSecRef = React.useRef<number | null>(null);
+
   const [mapOpen, setMapOpen] = React.useState<boolean>(() => loadLayoutPrefs().mapOpen);
   const [splitPct, setSplitPct] = React.useState<number>(() => loadLayoutPrefs().splitPct);
 
@@ -136,7 +135,6 @@ function FlightDetailsRoute() {
   const containerRef = React.useRef<HTMLDivElement | null>(null);
   const draggingRef = React.useRef(false);
 
-  // ---- helper: clamp + normalize range
   const setRangePctSafe = React.useCallback((r: [number, number]) => {
     let a = Math.max(0, Math.min(100, r[0]));
     let b = Math.max(0, Math.min(100, r[1]));
@@ -145,7 +143,6 @@ function FlightDetailsRoute() {
     setRangePct([a, b]);
   }, []);
 
-  // --- Splitter handlers ---
   const onDividerPointerDown = React.useCallback(
     (e: React.PointerEvent) => {
       if (!mapOpen) return;
@@ -167,7 +164,6 @@ function FlightDetailsRoute() {
     const x = e.clientX - rect.left;
     const pct = (x / rect.width) * 100;
 
-    // Charts min 40%, Map min 25%
     setSplitPct(clamp(pct, 40, 75));
   }, []);
 
@@ -185,24 +181,33 @@ function FlightDetailsRoute() {
   const computed = React.useMemo(() => {
     if (!flight?.igcContent || !flight.flightDate) return null;
 
-    const fixes = parseIgcFixes(flight.igcContent, flight.flightDate);
-    const { series, windows } = buildFlightSeries(fixes, windowSec);
+    const fixesFull = parseIgcFixes(flight.igcContent, flight.flightDate);
+    const { series, windows } = buildFlightSeries(fixesFull, windowSec);
 
     const step = 1;
 
-    const rawPoints: LatLngTuple[] = fixes.map((f) => [f.lat, f.lon]);
+    const rawPoints: LatLngTuple[] = fixesFull.map((f) => [f.lat, f.lon]);
 
     const rawVario: number[] = [];
-    for (let i = 0; i < fixes.length - 1; i++) {
-      const dt = fixes[i + 1].tSec - fixes[i].tSec;
-      const da = fixes[i + 1].altitudeM - fixes[i].altitudeM;
+    for (let i = 0; i < fixesFull.length - 1; i++) {
+      const dt = fixesFull[i + 1].tSec - fixesFull[i].tSec;
+      const da = fixesFull[i + 1].altitudeM - fixesFull[i].altitudeM;
       rawVario.push(da / Math.max(0.5, dt));
     }
 
     const mapPoints = sampleEveryNth(rawPoints, step);
     const mapVario = sampleEveryNth(rawVario, step);
 
-    return { fixesCount: fixes.length, series, windows, mapPoints, mapVario };
+    // ✅ minimal fixes for tSec→pos lookup (full resolution)
+    const t0 = fixesFull[0]?.tSec ?? 0;
+
+    const fixes = fixesFull.map((f) => ({
+      tSec: f.tSec - t0,   // ✅ RELATIV: 0..duration
+      lat: f.lat,
+      lon: f.lon,
+    }));
+
+    return { fixesCount: fixesFull.length, series, windows, mapPoints, mapVario, fixes };
   }, [flight?.igcContent, flight?.flightDate, windowSec]);
 
   React.useEffect(() => {
@@ -234,7 +239,6 @@ function FlightDetailsRoute() {
     };
   }, [id, token]);
 
-  // ✅ ECharts needs resize when layout width changes (map open/drag)
   React.useEffect(() => {
     const alt = altRef.current?.getEchartsInstance?.();
     const vario = varioRef.current?.getEchartsInstance?.();
@@ -249,7 +253,6 @@ function FlightDetailsRoute() {
     return () => window.clearTimeout(t);
   }, [mapOpen, splitPct]);
 
-  // ---- Build chart data ----
   const chartData = React.useMemo(() => {
     if (!computed) return null;
 
@@ -284,7 +287,6 @@ function FlightDetailsRoute() {
     background-color:#999;
   "></span>`;
 
-  // ✅ alt chart should show window based on rangePct
   const altOption = React.useMemo(() => {
     if (!chartData) return {};
 
@@ -334,7 +336,6 @@ function FlightDetailsRoute() {
           zoomOnMouseWheel: true,
           moveOnMouseMove: true,
           moveOnMouseWheel: true,
-
         },
         {
           type: "slider",
@@ -351,17 +352,11 @@ function FlightDetailsRoute() {
           showSymbol: false,
           sampling: "lttb",
           lineStyle: { width: 2 },
-
-          // ✅ farbiger Bereich (Zeitfenster)
           markArea: {
-            silent: true, // wichtig: nur Anzeige, kein Hover-Kram
-            itemStyle: {
-              color: "rgba(59, 130, 246, 0.15)", // blau-transparent (Tailwind blue-500-ish)
-            },
+            silent: true,
+            itemStyle: { color: "rgba(59, 130, 246, 0.15)" },
             data: [[{ xAxis: winStartSec }, { xAxis: winEndSec }]],
           },
-
-          // ✅ optional: klare Grenzen links/rechts
           markLine: {
             silent: true,
             symbol: ["none", "none"],
@@ -373,7 +368,6 @@ function FlightDetailsRoute() {
     };
   }, [chartData, timeMarker, rangePct]);
 
-  // keep your vario/speed as-is
   const varioOption = React.useMemo(() => {
     if (!chartData) return {};
     return {
@@ -513,7 +507,6 @@ function FlightDetailsRoute() {
     };
   }, [chartData, syncZoom, timeMarker]);
 
-  // ---- Altitude events: now also update rangePct when user drags window ----
   const altEvents = React.useMemo(() => {
     return {
       dataZoom: () => {
@@ -522,7 +515,6 @@ function FlightDetailsRoute() {
         const alt = altRef.current?.getEchartsInstance?.();
         if (!alt) return;
 
-        // read current zoom window (percent)
         const dzs = alt.getOption()?.dataZoom as any[] | undefined;
         if (!dzs?.length) return;
 
@@ -533,13 +525,10 @@ function FlightDetailsRoute() {
 
         if (!dz) return;
 
-        // ✅ update state window from chart interaction
         if (typeof dz.start === "number" && typeof dz.end === "number") {
-          // avoid tiny jitter loops
           setRangePctSafe([dz.start, dz.end]);
         }
 
-        // ✅ keep your existing syncZoom behavior (Altitude drives others)
         if (!syncZoom) return;
 
         const vario = varioRef.current?.getEchartsInstance?.();
@@ -576,7 +565,19 @@ function FlightDetailsRoute() {
         const x = e?.axesInfo?.[0]?.value;
         if (typeof x !== "number") return;
 
+        // ✅ send tSec to map (imperativ + rAF throttle)
+        const tSec = Math.round(x);
+        pendingHoverSecRef.current = tSec;
 
+        if (hoverRafRef.current == null) {
+          hoverRafRef.current = requestAnimationFrame(() => {
+            hoverRafRef.current = null;
+            const next = pendingHoverSecRef.current;
+            pendingHoverSecRef.current = null;
+            if (next == null) return;
+            mapRef.current?.setHoverTSec(next);
+          });
+        }
 
         const alt = altRef.current?.getEchartsInstance?.();
         const vario = varioRef.current?.getEchartsInstance?.();
@@ -619,6 +620,14 @@ function FlightDetailsRoute() {
       },
 
       globalout: () => {
+        // clear pending hover rAF
+        pendingHoverSecRef.current = null;
+        if (hoverRafRef.current != null) {
+          cancelAnimationFrame(hoverRafRef.current);
+          hoverRafRef.current = null;
+        }
+        // optional: mapRef.current?.setHoverTSec(null);
+
         if (!syncZoom) return;
         for (const ch of [
           altRef.current?.getEchartsInstance?.(),
@@ -692,7 +701,6 @@ function FlightDetailsRoute() {
                   />
                 </Group>
 
-                {/* SPLIT LAYOUT */}
                 <Box
                   ref={containerRef}
                   style={{
@@ -792,8 +800,10 @@ function FlightDetailsRoute() {
 
                       <Box style={{ flex: 1, minHeight: 0 }}>
                         <FlightMap
-                          points={computed?.mapPoints ?? []}
-                          vario={computed?.mapVario}
+                          ref={mapRef}
+                          fixes={computed.fixes} // ✅ full-res lookup
+                          points={computed.mapPoints}
+                          vario={computed.mapVario}
                           baseMap={baseMap}
                           watchKey={`${mapOpen}-${splitPct}-${baseMap}`}
                           rangePct={rangePct}
