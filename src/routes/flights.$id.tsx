@@ -113,8 +113,13 @@ function FlightDetailsRoute() {
   const [splitPct, setSplitPct] = React.useState<number>(() => loadLayoutPrefs().splitPct);
 
   React.useEffect(() => {
-    saveLayoutPrefs({ mapOpen, splitPct });
+    const t = window.setTimeout(() => {
+      saveLayoutPrefs({ mapOpen, splitPct: Math.round(splitPct) });
+    }, 500);
+
+    return () => window.clearTimeout(t);
   }, [mapOpen, splitPct]);
+
 
   const containerRef = React.useRef<HTMLDivElement | null>(null);
   const draggingRef = React.useRef(false);
@@ -208,6 +213,49 @@ function FlightDetailsRoute() {
   }, [fixesFull, windowSec]);
 
   const [zoomPct, setZoomPct] = React.useState<[number, number]>([0, 100]);
+
+  /**
+ * Berechnet die Vertikalgeschwindigkeit (m/s) in 5-Sekunden-Blöcken.
+ * @param points Array von FixPoint Objekten
+ * @returns Ein Array von [tSec, vSpeed] Paaren
+ */
+  function calculateVerticalSpeedBlocks(points: FixPoint[]): [number, number][] {
+    const result: [number, number][] = [];
+    const windowSize = 5;
+
+    for (let i = 0; i < points.length; i += windowSize) {
+      // Aktuellen Block extrahieren
+      const chunk = points.slice(i, i + windowSize);
+
+      let vSpeed = 0;
+
+      if (chunk.length > 1) {
+        const first = chunk[0];
+        const last = chunk[chunk.length - 1];
+
+        const deltaAlt = last.altitudeM - first.altitudeM;
+        const deltaTime = last.tSec - first.tSec;
+
+        // Berechnung m/s (Steigen/Sinken)
+        // Falls deltaTime 0 ist (sollte bei validen Daten nicht sein), bleibt vSpeed 0
+        vSpeed = deltaTime !== 0 ? deltaAlt / deltaTime : 0;
+      } else {
+        // Einzelner Punkt am Ende kann keine Geschwindigkeit berechnen, 
+        // wir nehmen den Wert 0 oder könnten den Wert des vorherigen Blocks nutzen.
+        vSpeed = 0;
+      }
+
+      // Ergebnis auf 2 Dezimalstellen runden
+      const roundedVSpeed = Math.round(vSpeed * 100) / 100;
+
+      // Für jeden Punkt im Original-Chunk ein [sec, vspeed] Paar hinzufügen
+      for (const point of chunk) {
+        result.push([point.tSec, roundedVSpeed]);
+      }
+    }
+
+    return result;
+  }
 
   React.useEffect(() => {
     const alt = altRef.current?.getEchartsInstance?.();
@@ -337,7 +385,15 @@ function FlightDetailsRoute() {
           showSymbol: false,
           lineStyle: { width: 2 },
           sampling: "lttb",
-          markLine: { symbol: ["none", "none"], lineStyle: { type: "dashed", opacity: 0.6 }, data: [{ yAxis: 0 }] },
+
+          smooth: 0.35,
+          smoothMonotone: "x",
+
+          markLine: {
+            symbol: ["none", "none"],
+            lineStyle: { type: "dashed", opacity: 0.6 },
+            data: [{ yAxis: 0 }],
+          },
         },
       ],
     };
