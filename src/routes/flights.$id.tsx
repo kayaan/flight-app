@@ -201,7 +201,7 @@ function FlightDetailsRoute() {
   const fixesFull = React.useMemo(() => {
     if (!flight?.igcContent || !flight.flightDate) return null;
     return parseIgcFixes(flight.igcContent, flight.flightDate);
-  }, [flight?.igcContent, flight?.flightDate]);
+  }, [flight]);
 
   // ✅ computed for charts + map (map consumes fixes only; no points/vario passed anymore)
   const computed = React.useMemo(() => {
@@ -219,6 +219,8 @@ function FlightDetailsRoute() {
 
     return { fixesCount: fixesFull.length, series, windows, fixes };
   }, [fixesFull, windowSec]);
+
+
   const [zoomPct, setZoomPct] = React.useState<[number, number]>([0, 100]);
 
   React.useEffect(() => {
@@ -237,6 +239,8 @@ function FlightDetailsRoute() {
 
   const chartData = React.useMemo(() => {
     if (!computed) return null;
+
+    console.warn("computed")
 
     const alt = computed.series.map((p) => [p.tSec, p.altitudeM] as [number, number]);
     const hSpeed = computed.series.map((p) => [p.tSec, p.gSpeedKmh] as [number, number]);
@@ -326,18 +330,18 @@ function FlightDetailsRoute() {
         valueFormatter: (v: unknown) => (typeof v === "number" ? v.toFixed(2) : String(v)),
         triggerOn: "none",
         alwaysShowContent: true,
-        formatter: (params: any) => {
-          const list = Array.isArray(params) ? params : [params];
-          const p0 = list[0];
-          const xSec = Math.round(Number(p0?.value?.[0] ?? p0?.axisValue ?? 0));
+        // formatter: (params: any) => {
+        //   const list = Array.isArray(params) ? params : [params];
+        //   const p0 = list[0];
+        //   const xSec = Math.round(Number(p0?.value?.[0] ?? p0?.axisValue ?? 0));
 
-          const lines = list.map((p: any) => {
-            const y = Number(p?.value?.[1] ?? p?.data?.[1] ?? p?.value ?? 0);
-            return `${p.marker ?? ""}${p.seriesName}: ${y.toFixed(2)}`;
-          });
+        //   const lines = list.map((p: any) => {
+        //     const y = Number(p?.value?.[1] ?? p?.data?.[1] ?? p?.value ?? 0);
+        //     return `${p.marker ?? ""}${p.seriesName}: ${y.toFixed(2)}`;
+        //   });
 
-          return `${lines.join("<br/>")}<br/>${timeMarker}${xSec}s`;
-        },
+        //   return `${lines.join("<br/>")}<br/>${timeMarker}${xSec}s`;
+        // },
       },
       axisPointer: { snap: true },
       xAxis: { type: "value", min: 0, max: chartData.maxT, axisLabel: { formatter: (v: number) => fmtTime(v) }, axisPointer: { show: true } },
@@ -376,7 +380,7 @@ function FlightDetailsRoute() {
       ],
       markLine: { symbol: ["none", "none"], lineStyle: { type: "dashed", opacity: 0.6 }, data: [{ yAxis: 0 }] },
     };
-  }, [chartData, syncZoom, timeMarker]);
+  }, [chartData, syncZoom]);
 
   const speedOption = React.useMemo(() => {
     if (!chartData) return {};
@@ -409,9 +413,6 @@ function FlightDetailsRoute() {
       series: [{ name: "Ground speed", type: "line", data: chartData.hSpeed, showSymbol: false, lineStyle: { width: 2 } }],
     };
   }, [chartData, syncZoom, timeMarker]);
-
-
-
 
   const altEvents = React.useMemo(() => {
     return {
