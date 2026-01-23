@@ -26,6 +26,10 @@ type LayoutPrefs = {
   splitPct: number;
 };
 
+function clamp(n: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, n));
+}
+
 function loadLayoutPrefs(): LayoutPrefs {
   try {
     const raw = localStorage.getItem(LS_KEY);
@@ -56,23 +60,6 @@ function fmtTime(sec: number) {
   const ss = s % 60;
   if (hh > 0) return `${hh}:${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}`;
   return `${mm}:${String(ss).padStart(2, "0")}`;
-}
-
-function clamp01(x: number) {
-  return Math.max(0, Math.min(1, x));
-}
-
-function clamp(n: number, min: number, max: number) {
-  return Math.min(max, Math.max(min, n));
-}
-
-function varioColor(v: number) {
-  const max = 7;
-  const t = clamp01(Math.abs(v) / max);
-  const hue = v >= 0 ? 120 : 0;
-  const sat = 35 + t * 45;
-  const light = 78 - t * 45;
-  return `hsl(${hue}, ${sat}%, ${light}%)`;
 }
 
 function safeClosestIndex(points: [number, number][], x: number) {
@@ -203,7 +190,7 @@ function FlightDetailsRoute() {
     return parseIgcFixes(flight.igcContent, flight.flightDate);
   }, [flight]);
 
-  // ✅ computed for charts + map (map consumes fixes only; no points/vario passed anymore)
+  // ✅ computed for charts + map
   const computed = React.useMemo(() => {
     if (!fixesFull) return null;
 
@@ -219,7 +206,6 @@ function FlightDetailsRoute() {
 
     return { fixesCount: fixesFull.length, series, windows, fixes };
   }, [fixesFull, windowSec]);
-
 
   const [zoomPct, setZoomPct] = React.useState<[number, number]>([0, 100]);
 
@@ -237,27 +223,35 @@ function FlightDetailsRoute() {
     return () => window.clearTimeout(t);
   }, [mapOpen, splitPct]);
 
+  // ✅ CHANGED: vario uses SAME point count as altitude (line chart)
   const chartData = React.useMemo(() => {
     if (!computed) return null;
-
-    console.warn("computed")
 
     const alt = computed.series.map((p) => [p.tSec, p.altitudeM] as [number, number]);
     const hSpeed = computed.series.map((p) => [p.tSec, p.gSpeedKmh] as [number, number]);
 
-    const vSpeed = computed.windows.map((p) => [p.tSec, p.vSpeedMs] as [number, number]);
-    const vUp = computed.windows.map((p) => [p.tSec, p.vSpeedMs >= 0 ? p.vSpeedMs : null] as [number, number | null]);
-    const vDown = computed.windows.map((p) => [p.tSec, p.vSpeedMs < 0 ? p.vSpeedMs : null] as [number, number | null]);
+    // vSpeed derived from altitude slope per sample -> same length as alt/hSpeed
+    const vSpeed = computed.series.map((p, i) => {
+      if (i === 0) return [p.tSec, 0] as [number, number];
+      const prev = computed.series[i - 1];
+      const dt = Math.max(1, p.tSec - prev.tSec); // avoid div by 0
+      const vs = (p.altitudeM - prev.altitudeM) / dt; // m/s
+      return [p.tSec, vs] as [number, number];
+    });
 
-    const maxTSeries = computed.series.length ? computed.series[computed.series.length - 1].tSec : 0;
-    const maxTWindows = computed.windows.length ? computed.windows[computed.windows.length - 1].tSec : 0;
-    const maxT = Math.max(maxTSeries, maxTWindows);
+    const maxT = computed.series.length ? computed.series[computed.series.length - 1].tSec : 0;
 
     const altValues = alt.map((p) => p[1]);
     const altMin = Math.min(...altValues);
     const altMax = Math.max(...altValues);
 
-    return { alt, hSpeed, vSpeed, vUp, vDown, maxT, altMin, altMax };
+    // nice-ish bounds for vario
+    const vVals = vSpeed.map((p) => p[1]);
+    const vAbsMax = Math.max(1, ...vVals.map((v) => Math.abs(v)));
+    const vMax = Math.ceil(vAbsMax * 1.05 * 2) / 2; // round to 0.5
+    const vMin = -vMax;
+
+    return { alt, hSpeed, vSpeed, maxT, altMin, altMax, vMin, vMax };
   }, [computed]);
 
   const timeMarker = `<span style="
@@ -303,7 +297,6 @@ function FlightDetailsRoute() {
         { type: "inside", xAxisIndex: 0 },
         { type: "slider", xAxisIndex: 0, start: zoomPct[0], end: zoomPct[1], height: 20, bottom: 8 },
       ],
-
       series: [
         {
           name: "Altitude",
@@ -319,6 +312,7 @@ function FlightDetailsRoute() {
     };
   }, [chartData, timeMarker, rangePct, zoomPct]);
 
+  // ✅ CHANGED: Vario is now a LINE chart (same data count as altitude)
   const varioOption = React.useMemo(() => {
     if (!chartData) return {};
     return {
@@ -330,55 +324,22 @@ function FlightDetailsRoute() {
         valueFormatter: (v: unknown) => (typeof v === "number" ? v.toFixed(2) : String(v)),
         triggerOn: "none",
         alwaysShowContent: true,
-        // formatter: (params: any) => {
-        //   const list = Array.isArray(params) ? params : [params];
-        //   const p0 = list[0];
-        //   const xSec = Math.round(Number(p0?.value?.[0] ?? p0?.axisValue ?? 0));
-
-        //   const lines = list.map((p: any) => {
-        //     const y = Number(p?.value?.[1] ?? p?.data?.[1] ?? p?.value ?? 0);
-        //     return `${p.marker ?? ""}${p.seriesName}: ${y.toFixed(2)}`;
-        //   });
-
-        //   return `${lines.join("<br/>")}<br/>${timeMarker}${xSec}s`;
-        // },
       },
       axisPointer: { snap: true },
       xAxis: { type: "value", min: 0, max: chartData.maxT, axisLabel: { formatter: (v: number) => fmtTime(v) }, axisPointer: { show: true } },
-      yAxis: { type: "value", name: "m/s", scale: true },
+      yAxis: { type: "value", name: "m/s", min: chartData.vMin, max: chartData.vMax, scale: true },
       dataZoom: [{ type: "inside", xAxisIndex: 0, zoomOnMouseWheel: !syncZoom, moveOnMouseMove: !syncZoom, moveOnMouseWheel: !syncZoom }],
       series: [
         {
-          name: "Vario up",
-          type: "bar",
-          data: chartData.vUp,
-          large: false,
-          progressive: 0,
+          name: "Vario",
+          type: "line",
+          data: chartData.vSpeed,
+          showSymbol: false,
+          lineStyle: { width: 2 },
+          sampling: "lttb",
           markLine: { symbol: ["none", "none"], lineStyle: { type: "dashed", opacity: 0.6 }, data: [{ yAxis: 0 }] },
-          itemStyle: {
-            color: (p: any) => {
-              const y = p.value?.[1];
-              if (y == null) return "rgba(0,0,0,0)";
-              return varioColor(y);
-            },
-          },
-        },
-        {
-          name: "Vario down",
-          type: "bar",
-          data: chartData.vDown,
-          large: false,
-          progressive: 0,
-          itemStyle: {
-            color: (p: any) => {
-              const y = p.value?.[1];
-              if (y == null) return "rgba(0,0,0,0)";
-              return varioColor(y);
-            },
-          },
         },
       ],
-      markLine: { symbol: ["none", "none"], lineStyle: { type: "dashed", opacity: 0.6 }, data: [{ yAxis: 0 }] },
     };
   }, [chartData, syncZoom]);
 
@@ -477,19 +438,16 @@ function FlightDetailsRoute() {
         const speed = speedRef.current?.getEchartsInstance?.();
         if (!alt || !vario || !speed) return;
 
+        // ✅ same index basis (same point count now)
         const iAlt = safeClosestIndex(chartData.alt, x);
-        const iSpeed = iAlt;
-
-        const iV = safeClosestIndex(chartData.vSpeed, x);
-        const vAt = chartData.vSpeed[iV]?.[1] ?? 0;
-        const varioSeriesIndex = vAt >= 0 ? 0 : 1;
+        const i = iAlt;
 
         try {
           syncingRef.current = true;
 
           alt.dispatchAction({ type: "showTip", seriesIndex: 0, dataIndex: iAlt });
-          vario.dispatchAction({ type: "showTip", xAxisIndex: 0, xAxisValue: x, seriesIndex: varioSeriesIndex, dataIndex: iV });
-          speed.dispatchAction({ type: "showTip", xAxisIndex: 0, xAxisValue: x, seriesIndex: 0, dataIndex: iSpeed });
+          vario.dispatchAction({ type: "showTip", seriesIndex: 0, dataIndex: i });
+          speed.dispatchAction({ type: "showTip", seriesIndex: 0, dataIndex: i });
 
           vario.dispatchAction({ type: "updateAxisPointer", xAxisIndex: 0, value: x });
           speed.dispatchAction({ type: "updateAxisPointer", xAxisIndex: 0, value: x });
