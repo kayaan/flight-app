@@ -12,6 +12,7 @@ import { useAuthStore } from "../features/auth/store/auth.store";
 import { flightApi } from "../features/flights/flights.api";
 
 import { FlightMap, type FlightMapHandle, type FixPoint } from "../features/flights/map/FlightMapBase";
+import type { SeriesPoint } from "../features/flights/igc";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -214,48 +215,6 @@ function FlightDetailsRoute() {
 
   const [zoomPct, setZoomPct] = React.useState<[number, number]>([0, 100]);
 
-  /**
- * Berechnet die Vertikalgeschwindigkeit (m/s) in 5-Sekunden-Blöcken.
- * @param points Array von FixPoint Objekten
- * @returns Ein Array von [tSec, vSpeed] Paaren
- */
-  function calculateVerticalSpeedBlocks(points: FixPoint[]): [number, number][] {
-    const result: [number, number][] = [];
-    const windowSize = 5;
-
-    for (let i = 0; i < points.length; i += windowSize) {
-      // Aktuellen Block extrahieren
-      const chunk = points.slice(i, i + windowSize);
-
-      let vSpeed = 0;
-
-      if (chunk.length > 1) {
-        const first = chunk[0];
-        const last = chunk[chunk.length - 1];
-
-        const deltaAlt = last.altitudeM - first.altitudeM;
-        const deltaTime = last.tSec - first.tSec;
-
-        // Berechnung m/s (Steigen/Sinken)
-        // Falls deltaTime 0 ist (sollte bei validen Daten nicht sein), bleibt vSpeed 0
-        vSpeed = deltaTime !== 0 ? deltaAlt / deltaTime : 0;
-      } else {
-        // Einzelner Punkt am Ende kann keine Geschwindigkeit berechnen, 
-        // wir nehmen den Wert 0 oder könnten den Wert des vorherigen Blocks nutzen.
-        vSpeed = 0;
-      }
-
-      // Ergebnis auf 2 Dezimalstellen runden
-      const roundedVSpeed = Math.round(vSpeed * 100) / 100;
-
-      // Für jeden Punkt im Original-Chunk ein [sec, vspeed] Paar hinzufügen
-      for (const point of chunk) {
-        result.push([point.tSec, roundedVSpeed]);
-      }
-    }
-
-    return result;
-  }
 
   React.useEffect(() => {
     const alt = altRef.current?.getEchartsInstance?.();
@@ -271,6 +230,50 @@ function FlightDetailsRoute() {
     return () => window.clearTimeout(t);
   }, [mapOpen, splitPct]);
 
+
+  function calculateVSpeedFromSeries(points: SeriesPoint[]): [number, number][] {
+    const result: [number, number][] = [];
+    const windowSize = 5;
+
+    for (let i = 0; i < points.length; i += windowSize) {
+      // Den aktuellen 5-Sekunden-Block auswählen
+      const chunk = points.slice(i, i + windowSize);
+
+      let vSpeed = 0;
+
+      if (chunk.length > 1) {
+        const startPoint = chunk[0];
+        const endPoint = chunk[chunk.length - 1];
+
+        const deltaAlt = endPoint.altitudeM - startPoint.altitudeM;
+        const deltaTime = endPoint.tSec - startPoint.tSec;
+
+        // Vertikalgeschwindigkeit in m/s berechnen
+        // Falls deltaTime 0 ist (z.B. bei fehlerhaften Zeitstempeln), bleibt vSpeed 0
+        if (deltaTime !== 0) {
+          vSpeed = deltaAlt / deltaTime;
+        }
+      } else {
+        // Falls nur ein Punkt im Block ist (am Ende der Liste), 
+        // kann keine Rate berechnet werden. Wir setzen 0 oder 
+        // könnten den Wert des vorherigen Blocks übernehmen.
+        vSpeed = 0;
+      }
+
+      // Auf zwei Nachkommastellen runden für saubere Daten
+      const finalVSpeed = Math.round(vSpeed * 100) / 100;
+
+      // Für jeden ursprünglichen Punkt im Block das Ergebnis-Tupel hinzufügen
+      for (const point of chunk) {
+        result.push([point.tSec, finalVSpeed]);
+      }
+    }
+
+    return result;
+  }
+
+
+
   // ✅ CHANGED: vario uses SAME point count as altitude (line chart)
   const chartData = React.useMemo(() => {
     if (!computed) return null;
@@ -279,13 +282,7 @@ function FlightDetailsRoute() {
     const hSpeed = computed.series.map((p) => [p.tSec, p.gSpeedKmh] as [number, number]);
 
     // vSpeed derived from altitude slope per sample -> same length as alt/hSpeed
-    const vSpeed = computed.series.map((p, i) => {
-      if (i === 0) return [p.tSec, 0] as [number, number];
-      const prev = computed.series[i - 1];
-      const dt = Math.max(1, p.tSec - prev.tSec); // avoid div by 0
-      const vs = (p.altitudeM - prev.altitudeM) / dt; // m/s
-      return [p.tSec, vs] as [number, number];
-    });
+    const vSpeed: [number, number][] = calculateVSpeedFromSeries(computed.series)
 
     const maxT = computed.series.length ? computed.series[computed.series.length - 1].tSec : 0;
 
@@ -370,11 +367,18 @@ function FlightDetailsRoute() {
         trigger: "axis",
         axisPointer: { type: "cross" },
         valueFormatter: (v: unknown) => (typeof v === "number" ? v.toFixed(2) : String(v)),
-        triggerOn: "none",
         alwaysShowContent: true,
       },
-      axisPointer: { snap: true },
-      xAxis: { type: "value", min: 0, max: chartData.maxT, axisLabel: { formatter: (v: number) => fmtTime(v) }, axisPointer: { show: true } },
+      axisPointer: {
+        show: true,
+        snap: true,
+        lineStyle: { type: "dashed", opacity: 0.7 },
+      },
+      xAxis: {
+        type: "value", min: 0,
+        max: chartData.maxT, axisLabel: { formatter: (v: number) => fmtTime(v) },
+        axisPointer: { show: true, lineStyle: { type: "dashed", opacity: 0.7 } },
+      },
       yAxis: { type: "value", name: "m/s", min: chartData.vMin, max: chartData.vMax, scale: true },
       dataZoom: [{ type: "inside", xAxisIndex: 0, zoomOnMouseWheel: !syncZoom, moveOnMouseMove: !syncZoom, moveOnMouseWheel: !syncZoom }],
       series: [
@@ -408,7 +412,6 @@ function FlightDetailsRoute() {
         trigger: "axis",
         axisPointer: { type: "cross" },
         valueFormatter: (v: unknown) => (typeof v === "number" ? v.toFixed(2) : String(v)),
-        triggerOn: "none",
         alwaysShowContent: true,
         formatter: (params: any) => {
           const list = Array.isArray(params) ? params : [params];
