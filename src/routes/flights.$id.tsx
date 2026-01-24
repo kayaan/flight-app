@@ -2,7 +2,7 @@
 import * as React from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { Box, Stack, Text, Alert, Button, Group, Checkbox } from "@mantine/core";
-import { IconAlertCircle, IconMap, IconX } from "@tabler/icons-react";
+import { IconAlertCircle } from "@tabler/icons-react";
 import EChartsReact from "echarts-for-react";
 import * as echarts from "echarts";
 
@@ -10,9 +10,9 @@ import type { FlightRecordDetails } from "../features/flights/flights.types";
 import { buildFlightSeries, calculationWindow, parseIgcFixes } from "../features/flights/igc/igc.series";
 import { useAuthStore } from "../features/auth/store/auth.store";
 import { flightApi } from "../features/flights/flights.api";
-
-import { FlightMap, type FlightMapHandle, type FixPoint } from "../features/flights/map/FlightMapBase";
 import type { SeriesPoint } from "../features/flights/igc";
+
+import { FlightMap, type FixPoint, type BaseMap } from "../features/flights/map/FlightMapBase";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -20,38 +20,8 @@ export const Route = createFileRoute("/flights/$id")({
   component: FlightDetailsRoute,
 });
 
-const LS_KEY = "flyapp.flightDetails.layout.v1";
-
-type LayoutPrefs = {
-  mapOpen: boolean;
-  splitPct: number;
-};
-
 function clamp(n: number, min: number, max: number) {
   return Math.min(max, Math.max(min, n));
-}
-
-function loadLayoutPrefs(): LayoutPrefs {
-  try {
-    const raw = localStorage.getItem(LS_KEY);
-    if (!raw) return { mapOpen: false, splitPct: 60 };
-
-    const parsed = JSON.parse(raw) as Partial<LayoutPrefs>;
-    const mapOpen = Boolean(parsed.mapOpen);
-    const splitPct = clamp(Number(parsed.splitPct ?? 60), 40, 75);
-
-    return { mapOpen, splitPct };
-  } catch {
-    return { mapOpen: false, splitPct: 60 };
-  }
-}
-
-function saveLayoutPrefs(p: LayoutPrefs) {
-  try {
-    localStorage.setItem(LS_KEY, JSON.stringify(p));
-  } catch {
-    // ignore
-  }
 }
 
 function fmtTime(sec: number) {
@@ -63,32 +33,31 @@ function fmtTime(sec: number) {
   return `${mm}:${String(ss).padStart(2, "0")}`;
 }
 
-function safeClosestIndex(points: [number, number][], x: number) {
-  if (!points.length) return 0;
-  if (x <= points[0][0]) return 0;
-  const last = points.length - 1;
-  if (x >= points[last][0]) return last;
+function calculateVSpeedFromSeries(points: SeriesPoint[]): [number, number][] {
+  const result: [number, number][] = [];
+  const windowSize = 5;
 
-  let lo = 0;
-  let hi = last;
+  for (let i = 0; i < points.length; i += windowSize) {
+    const chunk = points.slice(i, i + windowSize);
 
-  while (lo < hi) {
-    const mid = (lo + hi) >> 1;
-    if (points[mid][0] < x) lo = mid + 1;
-    else hi = mid;
+    let vSpeed = 0;
+    if (chunk.length > 1) {
+      const a = chunk[0];
+      const b = chunk[chunk.length - 1];
+      const dt = b.tSec - a.tSec;
+      if (dt !== 0) vSpeed = (b.altitudeM - a.altitudeM) / dt;
+    }
+
+    const rounded = Math.round(vSpeed * 100) / 100;
+    for (const p of chunk) result.push([p.tSec, rounded]);
   }
 
-  const i1 = lo;
-  const i0 = lo - 1;
-
-  return Math.abs(points[i0][0] - x) <= Math.abs(points[i1][0] - x) ? i0 : i1;
+  return result;
 }
 
-function FlightDetailsRoute() {
+export default function FlightDetailsRoute() {
   const token = useAuthStore((s) => s.token);
   const { id } = Route.useParams();
-
-  const [baseMap, setBaseMap] = React.useState<"osm" | "topo">("topo");
 
   const [flight, setFlight] = React.useState<FlightRecordDetails | null>(null);
   const [busy, setBusy] = React.useState(false);
@@ -96,52 +65,19 @@ function FlightDetailsRoute() {
 
   const [windowSec] = React.useState(calculationWindow);
 
-  const [syncZoom, setSyncZoom] = React.useState(true);
-  const [rangePct, setRangePct] = React.useState<[number, number]>([0, 100]);
+  // map options
+  const [baseMap, setBaseMap] = React.useState<BaseMap>("topo");
 
-  const altRef = React.useRef<EChartsReact | null>(null);
-  const varioRef = React.useRef<EChartsReact | null>(null);
-  const speedRef = React.useRef<EChartsReact | null>(null);
-
-  const syncingRef = React.useRef(false);
-
-  const mapRef = React.useRef<FlightMapHandle | null>(null);
-
-  const hoverRafRef = React.useRef<number | null>(null);
-  const pendingHoverSecRef = React.useRef<number | null>(null);
-
-  const [mapOpen, setMapOpen] = React.useState<boolean>(() => loadLayoutPrefs().mapOpen);
-  const [splitPct, setSplitPct] = React.useState<number>(() => loadLayoutPrefs().splitPct);
-
-  React.useEffect(() => {
-    const t = window.setTimeout(() => {
-      saveLayoutPrefs({ mapOpen, splitPct: Math.round(splitPct) });
-    }, 500);
-
-    return () => window.clearTimeout(t);
-  }, [mapOpen, splitPct]);
-
-
+  // split layout
   const containerRef = React.useRef<HTMLDivElement | null>(null);
   const draggingRef = React.useRef(false);
+  const [splitPct, setSplitPct] = React.useState<number>(60); // charts width in %
 
-  const setRangePctSafe = React.useCallback((r: [number, number]) => {
-    let a = Math.max(0, Math.min(100, r[0]));
-    let b = Math.max(0, Math.min(100, r[1]));
-    if (a > b) [a, b] = [b, a];
-    if (b - a < 1) b = Math.min(100, a + 1);
-    setRangePct([a, b]);
+  const onDividerPointerDown = React.useCallback((e: React.PointerEvent) => {
+    e.preventDefault();
+    draggingRef.current = true;
+    (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
   }, []);
-
-  const onDividerPointerDown = React.useCallback(
-    (e: React.PointerEvent) => {
-      if (!mapOpen) return;
-      e.preventDefault();
-      draggingRef.current = true;
-      (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
-    },
-    [mapOpen]
-  );
 
   const onDividerPointerMove = React.useCallback((e: React.PointerEvent) => {
     if (!draggingRef.current) return;
@@ -190,18 +126,17 @@ function FlightDetailsRoute() {
     };
   }, [id, token]);
 
-  // ✅ parse once
   const fixesFull = React.useMemo(() => {
     if (!flight?.igcContent || !flight.flightDate) return null;
     return parseIgcFixes(flight.igcContent, flight.flightDate);
   }, [flight]);
 
-  // ✅ computed for charts + map
   const computed = React.useMemo(() => {
     if (!fixesFull) return null;
 
-    const { series, windows } = buildFlightSeries(fixesFull, windowSec);
+    const { series } = buildFlightSeries(fixesFull, windowSec);
 
+    // Map expects relative seconds
     const t0 = fixesFull[0]?.tSec ?? 0;
     const fixes: FixPoint[] = fixesFull.map((f) => ({
       tSec: f.tSec - t0,
@@ -210,11 +145,91 @@ function FlightDetailsRoute() {
       altitudeM: f.altitudeM,
     }));
 
-    return { fixesCount: fixesFull.length, series, windows, fixes };
+    return { series, fixes };
   }, [fixesFull, windowSec]);
 
-  const [zoomPct, setZoomPct] = React.useState<[number, number]>([0, 100]);
+  const chartData = React.useMemo(() => {
+    if (!computed) return null;
 
+    const alt = computed.series.map((p) => [p.tSec, p.altitudeM] as [number, number]);
+    const hSpeed = computed.series.map((p) => [p.tSec, p.gSpeedKmh] as [number, number]);
+    const vSpeed = calculateVSpeedFromSeries(computed.series);
+
+    const maxT = computed.series.length ? computed.series[computed.series.length - 1].tSec : 0;
+
+    const altValues = alt.map((p) => p[1]);
+    const altMin = Math.min(...altValues);
+    const altMax = Math.max(...altValues);
+
+    const vVals = vSpeed.map((p) => p[1]);
+    const vAbsMax = Math.max(1, ...vVals.map((v) => Math.abs(v)));
+    const vMax = Math.ceil(vAbsMax * 1.1 * 2) / 2;
+    const vMin = -vMax;
+
+    return { alt, hSpeed, vSpeed, maxT, altMin, altMax, vMin, vMax };
+  }, [computed]);
+
+  const baseOption = React.useMemo(() => {
+    return {
+      animation: false,
+      tooltip: { trigger: "axis", axisPointer: { type: "cross" } },
+      axisPointer: { snap: true },
+    };
+  }, []);
+
+  const altOption = React.useMemo(() => {
+    if (!chartData) return {};
+    return {
+      ...baseOption,
+      grid: { left: 56, right: 16, top: 24, bottom: 40 },
+      xAxis: { type: "value", min: 0, max: chartData.maxT, axisLabel: { formatter: (v: number) => fmtTime(v) } },
+      yAxis: { type: "value", name: "m", min: chartData.altMin, max: chartData.altMax, scale: true },
+      dataZoom: [{ type: "inside", xAxisIndex: 0 }, { type: "slider", xAxisIndex: 0, height: 20, bottom: 8 }],
+      series: [{ name: "Altitude", type: "line", data: chartData.alt, showSymbol: false, lineStyle: { width: 2 }, sampling: "lttb" }],
+    };
+  }, [chartData, baseOption]);
+
+  const varioOption = React.useMemo(() => {
+    if (!chartData) return {};
+    return {
+      ...baseOption,
+      grid: { left: 56, right: 16, top: 24, bottom: 24 },
+      xAxis: { type: "value", min: 0, max: chartData.maxT, axisLabel: { formatter: (v: number) => fmtTime(v) } },
+      yAxis: { type: "value", name: "m/s", min: chartData.vMin, max: chartData.vMax, scale: true },
+      dataZoom: [{ type: "inside", xAxisIndex: 0 }],
+      series: [
+        {
+          name: "Vario",
+          type: "line",
+          data: chartData.vSpeed,
+          showSymbol: false,
+          lineStyle: { width: 2 },
+          sampling: "lttb",
+          smooth: 0.35,
+          smoothMonotone: "x",
+          markLine: { symbol: ["none", "none"], lineStyle: { type: "dashed", opacity: 0.6 }, data: [{ yAxis: 0 }] },
+        },
+      ],
+    };
+  }, [chartData, baseOption]);
+
+  const speedOption = React.useMemo(() => {
+    if (!chartData) return {};
+    return {
+      ...baseOption,
+      grid: { left: 56, right: 16, top: 24, bottom: 24 },
+      xAxis: { type: "value", min: 0, max: chartData.maxT, axisLabel: { formatter: (v: number) => fmtTime(v) } },
+      yAxis: { type: "value", name: "km/h", scale: true },
+      dataZoom: [{ type: "inside", xAxisIndex: 0 }],
+      series: [{ name: "Ground speed", type: "line", data: chartData.hSpeed, showSymbol: false, lineStyle: { width: 2 }, sampling: "lttb" }],
+    };
+  }, [chartData, baseOption]);
+
+  // IMPORTANT: When layout changes, ECharts might need resize.
+  // We keep it cheap: just rely on react reflow + a small timeout.
+  const altRef = React.useRef<EChartsReact | null>(null);
+  const varioRef = React.useRef<EChartsReact | null>(null);
+  const speedRef = React.useRef<EChartsReact | null>(null);
 
   React.useEffect(() => {
     const alt = altRef.current?.getEchartsInstance?.();
@@ -228,327 +243,21 @@ function FlightDetailsRoute() {
     }, 60);
 
     return () => window.clearTimeout(t);
-  }, [mapOpen, splitPct]);
-
-
-  function calculateVSpeedFromSeries(points: SeriesPoint[]): [number, number][] {
-    const result: [number, number][] = [];
-    const windowSize = 5;
-
-    for (let i = 0; i < points.length; i += windowSize) {
-      // Den aktuellen 5-Sekunden-Block auswählen
-      const chunk = points.slice(i, i + windowSize);
-
-      let vSpeed = 0;
-
-      if (chunk.length > 1) {
-        const startPoint = chunk[0];
-        const endPoint = chunk[chunk.length - 1];
-
-        const deltaAlt = endPoint.altitudeM - startPoint.altitudeM;
-        const deltaTime = endPoint.tSec - startPoint.tSec;
-
-        // Vertikalgeschwindigkeit in m/s berechnen
-        // Falls deltaTime 0 ist (z.B. bei fehlerhaften Zeitstempeln), bleibt vSpeed 0
-        if (deltaTime !== 0) {
-          vSpeed = deltaAlt / deltaTime;
-        }
-      } else {
-        // Falls nur ein Punkt im Block ist (am Ende der Liste), 
-        // kann keine Rate berechnet werden. Wir setzen 0 oder 
-        // könnten den Wert des vorherigen Blocks übernehmen.
-        vSpeed = 0;
-      }
-
-      // Auf zwei Nachkommastellen runden für saubere Daten
-      const finalVSpeed = Math.round(vSpeed * 100) / 100;
-
-      // Für jeden ursprünglichen Punkt im Block das Ergebnis-Tupel hinzufügen
-      for (const point of chunk) {
-        result.push([point.tSec, finalVSpeed]);
-      }
-    }
-
-    return result;
-  }
-
-
-
-  // ✅ CHANGED: vario uses SAME point count as altitude (line chart)
-  const chartData = React.useMemo(() => {
-    if (!computed) return null;
-
-    const alt = computed.series.map((p) => [p.tSec, p.altitudeM] as [number, number]);
-    const hSpeed = computed.series.map((p) => [p.tSec, p.gSpeedKmh] as [number, number]);
-
-    // vSpeed derived from altitude slope per sample -> same length as alt/hSpeed
-    const vSpeed: [number, number][] = calculateVSpeedFromSeries(computed.series)
-
-    const maxT = computed.series.length ? computed.series[computed.series.length - 1].tSec : 0;
-
-    const altValues = alt.map((p) => p[1]);
-    const altMin = Math.min(...altValues);
-    const altMax = Math.max(...altValues);
-
-    // nice-ish bounds for vario
-    const vVals = vSpeed.map((p) => p[1]);
-    const vAbsMax = Math.max(1, ...vVals.map((v) => Math.abs(v)));
-    const vMax = Math.ceil(vAbsMax * 1.05 * 2) / 2; // round to 0.5
-    const vMin = -vMax;
-
-    return { alt, hSpeed, vSpeed, maxT, altMin, altMax, vMin, vMax };
-  }, [computed]);
-
-  const timeMarker = `<span style="
-    display:inline-block;
-    margin-right:6px;
-    border-radius:50%;
-    width:10px;
-    height:10px;
-    background-color:#999;
-  "></span>`;
-
-  const altOption = React.useMemo(() => {
-    if (!chartData) return {};
-
-    const [winStartPct, winEndPct] = rangePct;
-    const winStartSec = (chartData.maxT * winStartPct) / 100;
-    const winEndSec = (chartData.maxT * winEndPct) / 100;
-
-    return {
-      animation: false,
-      grid: { left: 56, right: 16, top: 24, bottom: 40 },
-      tooltip: {
-        trigger: "axis",
-        axisPointer: { type: "cross" },
-        valueFormatter: (v: unknown) => (typeof v === "number" ? v.toFixed(0) : String(v)),
-        formatter: (params: any) => {
-          const list = Array.isArray(params) ? params : [params];
-          const p0 = list[0];
-          const xSec = Math.round(Number(p0?.value?.[0] ?? p0?.axisValue ?? 0));
-
-          const lines = list.map((p: any) => {
-            const y = Number(p?.value?.[1] ?? p?.data?.[1] ?? p?.value ?? 0);
-            return `${p.marker ?? ""}${p.seriesName}: ${Math.round(y)}`;
-          });
-
-          return `${lines.join("<br/>")}<br/>${timeMarker}t: ${xSec}s`;
-        },
-      },
-      axisPointer: { snap: true },
-      xAxis: { type: "value", min: 0, max: chartData.maxT, axisLabel: { formatter: (v: number) => fmtTime(v) } },
-      yAxis: { type: "value", name: "m", min: chartData.altMin, max: chartData.altMax, axisLabel: { formatter: (v: number) => String(Math.round(v)) }, scale: true },
-      dataZoom: [
-        { type: "inside", xAxisIndex: 0 },
-        { type: "slider", xAxisIndex: 0, start: zoomPct[0], end: zoomPct[1], height: 20, bottom: 8 },
-      ],
-      series: [
-        {
-          name: "Altitude",
-          type: "line",
-          data: chartData.alt,
-          showSymbol: false,
-          sampling: "lttb",
-          lineStyle: { width: 2 },
-          markArea: { silent: true, itemStyle: { color: "rgba(59, 130, 246, 0.15)" }, data: [[{ xAxis: winStartSec }, { xAxis: winEndSec }]] },
-          markLine: { silent: true, symbol: ["none", "none"], lineStyle: { type: "solid", width: 1, opacity: 0.55 }, data: [{ xAxis: winStartSec }, { xAxis: winEndSec }] },
-        },
-      ],
-    };
-  }, [chartData, timeMarker, rangePct, zoomPct]);
-
-  // ✅ CHANGED: Vario is now a LINE chart (same data count as altitude)
-  const varioOption = React.useMemo(() => {
-    if (!chartData) return {};
-    return {
-      animation: false,
-      grid: { left: 56, right: 16, top: 24, bottom: 24 },
-      tooltip: {
-        trigger: "axis",
-        axisPointer: { type: "cross" },
-        valueFormatter: (v: unknown) => (typeof v === "number" ? v.toFixed(2) : String(v)),
-        alwaysShowContent: true,
-      },
-      axisPointer: {
-        show: true,
-        snap: true,
-        lineStyle: { type: "dashed", opacity: 0.7 },
-      },
-      xAxis: {
-        type: "value", min: 0,
-        max: chartData.maxT, axisLabel: { formatter: (v: number) => fmtTime(v) },
-        axisPointer: { show: true, lineStyle: { type: "dashed", opacity: 0.7 } },
-      },
-      yAxis: { type: "value", name: "m/s", min: chartData.vMin, max: chartData.vMax, scale: true },
-      dataZoom: [{ type: "inside", xAxisIndex: 0, zoomOnMouseWheel: !syncZoom, moveOnMouseMove: !syncZoom, moveOnMouseWheel: !syncZoom }],
-      series: [
-        {
-          name: "Vario",
-          type: "line",
-          data: chartData.vSpeed,
-          showSymbol: false,
-          lineStyle: { width: 2 },
-          sampling: "lttb",
-
-          smooth: 0.35,
-          smoothMonotone: "x",
-
-          markLine: {
-            symbol: ["none", "none"],
-            lineStyle: { type: "dashed", opacity: 0.6 },
-            data: [{ yAxis: 0 }],
-          },
-        },
-      ],
-    };
-  }, [chartData, syncZoom]);
-
-  const speedOption = React.useMemo(() => {
-    if (!chartData) return {};
-    return {
-      animation: false,
-      grid: { left: 56, right: 16, top: 24, bottom: 24 },
-      tooltip: {
-        trigger: "axis",
-        axisPointer: { type: "cross" },
-        valueFormatter: (v: unknown) => (typeof v === "number" ? v.toFixed(2) : String(v)),
-        alwaysShowContent: true,
-        formatter: (params: any) => {
-          const list = Array.isArray(params) ? params : [params];
-          const p0 = list[0];
-          const xSec = Math.round(Number(p0?.value?.[0] ?? p0?.axisValue ?? 0));
-
-          const lines = list.map((p: any) => {
-            const y = Number(p?.value?.[1] ?? p?.data?.[1] ?? p?.value ?? 0);
-            return `${p.marker ?? ""}${p.seriesName}: ${y.toFixed(1)}`;
-          });
-
-          return `${lines.join("<br/>")}<br/>${timeMarker}${xSec}s`;
-        },
-      },
-      axisPointer: { snap: true },
-      xAxis: { type: "value", min: 0, max: chartData.maxT, axisLabel: { formatter: (v: number) => fmtTime(v) }, axisPointer: { show: true } },
-      yAxis: { type: "value", name: "km/h", scale: true },
-      dataZoom: [{ type: "inside", xAxisIndex: 0, zoomOnMouseWheel: !syncZoom, moveOnMouseMove: !syncZoom, moveOnMouseWheel: !syncZoom }],
-      series: [{ name: "Ground speed", type: "line", data: chartData.hSpeed, showSymbol: false, lineStyle: { width: 2 } }],
-    };
-  }, [chartData, syncZoom, timeMarker]);
-
-  const altEvents = React.useMemo(() => {
-    return {
-      dataZoom: () => {
-        if (syncingRef.current) return;
-
-        const alt = altRef.current?.getEchartsInstance?.();
-        if (!alt) return;
-
-        const dzs = alt.getOption()?.dataZoom as any[] | undefined;
-        if (!dzs?.length) return;
-
-        const dz = dzs.find((z) => z.type === "slider") ?? dzs.find((z) => z.type === "inside") ?? dzs[0];
-        if (!dz) return;
-
-        if (typeof dz.start === "number" && typeof dz.end === "number") {
-          setZoomPct([dz.start, dz.end]);
-        }
-
-        if (!syncZoom) return;
-
-        const vario = varioRef.current?.getEchartsInstance?.();
-        const speed = speedRef.current?.getEchartsInstance?.();
-        if (!vario || !speed) return;
-
-        try {
-          syncingRef.current = true;
-
-          if (typeof dz.start === "number" && typeof dz.end === "number") {
-            for (const ch of [vario, speed]) ch.dispatchAction({ type: "dataZoom", xAxisIndex: 0, start: dz.start, end: dz.end });
-          } else if (typeof dz.startValue === "number" && typeof dz.endValue === "number") {
-            for (const ch of [vario, speed]) ch.dispatchAction({ type: "dataZoom", xAxisIndex: 0, startValue: dz.startValue, endValue: dz.endValue });
-          }
-        } finally {
-          syncingRef.current = false;
-        }
-      },
-
-      updateAxisPointer: (e: any) => {
-        if (!syncZoom) return;
-        if (!chartData) return;
-        if (syncingRef.current) return;
-
-        const x = e?.axesInfo?.[0]?.value;
-        if (typeof x !== "number") return;
-
-        const tSec = Math.round(x);
-        pendingHoverSecRef.current = tSec;
-
-        if (hoverRafRef.current == null) {
-          hoverRafRef.current = requestAnimationFrame(() => {
-            hoverRafRef.current = null;
-            const next = pendingHoverSecRef.current;
-            pendingHoverSecRef.current = null;
-            if (next == null) return;
-            mapRef.current?.setHoverTSec(next);
-          });
-        }
-
-        const alt = altRef.current?.getEchartsInstance?.();
-        const vario = varioRef.current?.getEchartsInstance?.();
-        const speed = speedRef.current?.getEchartsInstance?.();
-        if (!alt || !vario || !speed) return;
-
-        // ✅ same index basis (same point count now)
-        const iAlt = safeClosestIndex(chartData.alt, x);
-        const i = iAlt;
-
-        try {
-          syncingRef.current = true;
-
-          alt.dispatchAction({ type: "showTip", seriesIndex: 0, dataIndex: iAlt });
-          vario.dispatchAction({ type: "showTip", seriesIndex: 0, dataIndex: i });
-          speed.dispatchAction({ type: "showTip", seriesIndex: 0, dataIndex: i });
-
-          vario.dispatchAction({ type: "updateAxisPointer", xAxisIndex: 0, value: x });
-          speed.dispatchAction({ type: "updateAxisPointer", xAxisIndex: 0, value: x });
-        } finally {
-          syncingRef.current = false;
-        }
-      },
-
-      globalout: () => {
-        pendingHoverSecRef.current = null;
-        if (hoverRafRef.current != null) {
-          cancelAnimationFrame(hoverRafRef.current);
-          hoverRafRef.current = null;
-        }
-
-        if (!syncZoom) return;
-        for (const ch of [altRef.current?.getEchartsInstance?.(), varioRef.current?.getEchartsInstance?.(), speedRef.current?.getEchartsInstance?.()].filter(Boolean) as any[]) {
-          ch.dispatchAction({ type: "hideTip" });
-        }
-      },
-    };
-  }, [syncZoom, chartData]);
+  }, [splitPct]);
 
   return (
     <Box p="md">
       <Stack gap="sm">
-        <Group gap="xs">
+        <Group justify="space-between">
           <Button variant="light" onClick={() => window.history.back()}>
             Back
           </Button>
 
-          {!mapOpen ? (
-            <Button leftSection={<IconMap size={16} />} variant="light" onClick={() => setMapOpen(true)} disabled={!computed?.fixes?.length}>
-              Map open
-            </Button>
-          ) : (
-            <Button leftSection={<IconX size={16} />} variant="light" onClick={() => setMapOpen(false)}>
-              Map close
-            </Button>
-          )}
-
-          <Checkbox label="Topo" checked={baseMap === "topo"} onChange={(e) => setBaseMap(e.currentTarget.checked ? "topo" : "osm")} />
+          <Checkbox
+            label="Topo"
+            checked={baseMap === "topo"}
+            onChange={(e) => setBaseMap(e.currentTarget.checked ? "topo" : "osm")}
+          />
         </Group>
 
         {busy && <Text c="dimmed">Loading...</Text>}
@@ -561,85 +270,97 @@ function FlightDetailsRoute() {
 
         {!busy && !error && !flight && <Text c="dimmed">No flight found.</Text>}
 
-        {flight && (
-          <>
-            {!computed || !chartData ? (
-              <Text c="dimmed" size="sm">
-                Missing igcContent or flightDate.
-              </Text>
-            ) : (
-              <>
-                <Group justify="space-between" align="center">
-                  <Text size="sm">
-                    <b>Fixes:</b> {computed.fixesCount} &nbsp; <b>Series:</b> {computed.series.length} &nbsp; <b>Windows:</b>{" "}
-                    {computed.windows.length} (windowSec={windowSec})
+        {flight && !computed && (
+          <Text c="dimmed" size="sm">
+            Missing igcContent or flightDate.
+          </Text>
+        )}
+
+        {computed && chartData && (
+          <Box
+            ref={containerRef}
+            style={{
+              display: "flex",
+              alignItems: "stretch",
+              width: "100%",
+              height: "calc(100vh - 180px)", // optional: give map room; adjust/remove as you like
+              minHeight: 520,
+            }}
+          >
+            {/* LEFT: Charts */}
+            <Box
+              style={{
+                width: `${splitPct}%`,
+                paddingRight: 12,
+                minWidth: 320,
+                overflow: "auto",
+              }}
+            >
+              <Stack gap="xs">
+                <Box>
+                  <Text size="sm" fw={600} mb={4}>
+                    Altitude
                   </Text>
-
-                  <Checkbox label="Sync zoom (Altitude drives others)" checked={syncZoom} onChange={(e) => setSyncZoom(e.currentTarget.checked)} />
-                </Group>
-
-                <Box ref={containerRef} style={{ display: "flex", alignItems: "stretch", width: "100%" }}>
-                  {/* LEFT: Charts */}
-                  <Box style={{ width: mapOpen ? `${splitPct}%` : "100%", paddingRight: mapOpen ? 12 : 0, transition: "width 120ms ease" }}>
-                    <Stack gap="xs">
-                      <Box>
-                        <Text size="sm" fw={600} mb={4}>
-                          Altitude (Zeitfenster ziehbar)
-                        </Text>
-                        <EChartsReact echarts={echarts} ref={altRef as any} option={altOption} style={{ height: 320, width: "100%" }} onEvents={altEvents} lazyUpdate />
-                      </Box>
-
-                      <Box>
-                        <Text size="sm" fw={600} mb={4}>
-                          Vertical speed (Vario)
-                        </Text>
-                        <EChartsReact echarts={echarts} ref={varioRef as any} option={varioOption} style={{ height: 220, width: "100%" }} notMerge lazyUpdate />
-                      </Box>
-
-                      <Box>
-                        <Text size="sm" fw={600} mb={4}>
-                          Horizontal speed
-                        </Text>
-                        <EChartsReact echarts={echarts} ref={speedRef as any} option={speedOption} style={{ height: 220, width: "100%" }} notMerge lazyUpdate />
-                      </Box>
-                    </Stack>
-                  </Box>
-
-                  {/* MIDDLE: Drag Handle */}
-                  {mapOpen && (
-                    <Box
-                      onPointerDown={onDividerPointerDown}
-                      onPointerMove={onDividerPointerMove}
-                      onPointerUp={onDividerPointerUp}
-                      style={{ width: 12, cursor: "col-resize", userSelect: "none", touchAction: "none", display: "flex", alignItems: "stretch", marginRight: 12 }}
-                    >
-                      <Box style={{ width: 1, margin: "0 auto", background: "var(--mantine-color-gray-3)" }} />
-                    </Box>
-                  )}
-
-                  {/* RIGHT: Map */}
-                  {mapOpen && (
-                    <Box style={{ width: `${100 - splitPct}%`, minWidth: 260, display: "flex", flexDirection: "column", alignItems: "stretch" }}>
-                      <Text size="sm" fw={600} mb={4}>
-                        Map
-                      </Text>
-
-                      <Box style={{ flex: 1, minHeight: 0 }}>
-                        <FlightMap
-                          ref={mapRef}
-                          fixes={computed.fixes}
-                          baseMap={baseMap}
-                          watchKey={`${mapOpen}-${splitPct}-${baseMap}-${id}`}
-                          rangePct={rangePct}
-                          onRangePctChange={setRangePctSafe}
-                        />
-                      </Box>
-                    </Box>
-                  )}
+                  <EChartsReact ref={altRef as any} echarts={echarts} option={altOption} style={{ height: 320, width: "100%" }} notMerge />
                 </Box>
-              </>
-            )}
-          </>
+
+                <Box>
+                  <Text size="sm" fw={600} mb={4}>
+                    Vertical speed (Vario)
+                  </Text>
+                  <EChartsReact ref={varioRef as any} echarts={echarts} option={varioOption} style={{ height: 220, width: "100%" }} notMerge />
+                </Box>
+
+                <Box>
+                  <Text size="sm" fw={600} mb={4}>
+                    Horizontal speed
+                  </Text>
+                  <EChartsReact ref={speedRef as any} echarts={echarts} option={speedOption} style={{ height: 220, width: "100%" }} notMerge />
+                </Box>
+              </Stack>
+            </Box>
+
+            {/* MIDDLE: Drag Divider */}
+            <Box
+              onPointerDown={onDividerPointerDown}
+              onPointerMove={onDividerPointerMove}
+              onPointerUp={onDividerPointerUp}
+              style={{
+                width: 12,
+                cursor: "col-resize",
+                userSelect: "none",
+                touchAction: "none",
+                display: "flex",
+                alignItems: "stretch",
+                marginRight: 12,
+              }}
+            >
+              <Box style={{ width: 1, margin: "0 auto", background: "var(--mantine-color-gray-3)" }} />
+            </Box>
+
+            {/* RIGHT: Map */}
+            <Box
+              style={{
+                width: `${100 - splitPct}%`,
+                minWidth: 280,
+                display: "flex",
+                flexDirection: "column",
+                minHeight: 0,
+              }}
+            >
+              <Text size="sm" fw={600} mb={4}>
+                Map
+              </Text>
+
+              <Box style={{ flex: 1, minHeight: 0 }}>
+                <FlightMap
+                  fixes={computed.fixes}
+                  baseMap={baseMap}
+                  watchKey={`${id}-${baseMap}-${splitPct}`}
+                />
+              </Box>
+            </Box>
+          </Box>
         )}
       </Stack>
     </Box>
