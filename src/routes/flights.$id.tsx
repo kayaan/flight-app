@@ -273,20 +273,24 @@ export default function FlightDetailsRoute() {
           }
         },
         formatter: (params: any[]) => {
-          const p = params[0]; // erste Serie (Höhe)
-          const height = Math.round(p.value[1]);
-
-          return `
-                <div>
-                  <strong>${height} m</strong>
-              `;
+          const y = params?.[0]?.value?.[1];
+          if (y == null) return "";
+          return `<strong>${Math.round(y)} m</strong>`;
         }
       },
       grid: { left: 56, right: 16, top: 24, bottom: 40 },
       xAxis: { type: "value", min: 0, max: chartData.maxT, axisLabel: { formatter: (v: number) => fmtTime(v) } },
       yAxis: { type: "value", name: "m", min: chartData.altMin, max: chartData.altMax, scale: true },
       dataZoom: [{ type: "inside", xAxisIndex: 0 }, { type: "slider", xAxisIndex: 0, height: 20, bottom: 8 }],
-      series: [{ name: "Altitude", type: "line", data: chartData.alt, showSymbol: false, lineStyle: { width: 2 }, }],
+      series: [
+        {
+          name: "Altitude",
+          type: "line",
+          data: chartData.alt,
+          showSymbol: false,
+          lineStyle: { width: 2 },
+
+        }],
     };
   }, [chartData, baseOption]);
 
@@ -321,13 +325,9 @@ export default function FlightDetailsRoute() {
           }
         },
         formatter: (params: any[]) => {
-          const p = params[0]; // erste Serie (Höhe)
-          const vSpeed = p.value[1].toFixed(1);
-
-          return `
-                <div>
-                  <strong>${vSpeed} m/s</strong>
-              `;
+          const y = params?.[0]?.value?.[1];
+          if (y == null) return "";
+          return `<strong>${y.toFixed(1)} m/s</strong>`;
         }
       },
       grid: { left: 56, right: 16, top: 24, bottom: 24 },
@@ -380,13 +380,9 @@ export default function FlightDetailsRoute() {
           }
         },
         formatter: (params: any[]) => {
-          const p = params[0]; // erste Serie (Höhe)
-          const vSpeed = p.value[1].toFixed(1);
-
-          return `
-                <div>
-                  <strong>${vSpeed} km/h</strong>
-              `;
+          const y = params?.[0]?.value?.[1];
+          if (y == null) return "";
+          return `<strong>${y.toFixed(1)} km/h</strong>`;
         }
       },
       grid: { left: 56, right: 16, top: 24, bottom: 24 },
