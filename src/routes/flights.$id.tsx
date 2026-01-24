@@ -16,6 +16,38 @@ import { FlightMap, type FixPoint, type BaseMap } from "../features/flights/map/
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
+interface AxisPointerLabelParams {
+  /**
+   * Der Wert der Achse an der aktuellen Maus-Position
+   */
+  value: number | string | Date;
+
+  /**
+   * Welche Achse ('x', 'y', manchmal 'z' oder 'angle'/'radius' bei Polar)
+   */
+  axisDimension: 'x' | 'y' | 'z' | string;
+
+  /**
+   * Index der Achse (0, 1, ... bei mehreren x/y-Achsen)
+   */
+  axisIndex: number;
+
+  /**
+   * Die Datenpunkte der Serien an dieser Position (meist 1 pro Serie)
+   */
+  seriesData: Array<{
+    seriesName?: string;
+    value: any;                    // number | number[] | ...
+    dataIndex?: number;
+    axisValue?: string | number;
+    axisValueLabel?: string;
+    // Füge bei Bedarf mehr Felder hinzu (color, marker, ...)
+  }>;
+
+  // Optional: Manchmal noch weitere interne Felder
+  [key: string]: any;
+}
+
 export const Route = createFileRoute("/flights/$id")({
   component: FlightDetailsRoute,
 });
@@ -216,7 +248,30 @@ export default function FlightDetailsRoute() {
       ...baseOption,
       tooltip: {
         trigger: "axis",
-        axisPointer: { type: "cross" },
+        axisPointer: {
+          type: "cross",
+          lineStyle: {
+            color: 'rgba(255, 77, 79, 0.9)',  // halbtransparentes Rot
+            width: 1.5,
+            type: 'dashed',
+            dashOffset: 0,                    // optional: Versatz der Striche
+          },
+          label: {
+            show: true,
+            formatter: (params: AxisPointerLabelParams) => {
+              if (params.axisDimension === 'x') {
+                const time = params.value as number;
+                return time.toFixed(0) + " s";
+              }
+
+              if (params.axisDimension === 'y') {
+                const height = params.value as number;
+                return height.toFixed(0) + " m";
+
+              }
+            }
+          }
+        },
         formatter: (params: any[]) => {
           const p = params[0]; // erste Serie (Höhe)
           const height = Math.round(p.value[1]);
@@ -241,7 +296,30 @@ export default function FlightDetailsRoute() {
       ...baseOption,
       tooltip: {
         trigger: "axis",
-        axisPointer: { type: "cross" },
+        axisPointer: {
+          type: "cross",
+          lineStyle: {
+            color: 'rgba(255, 77, 79, 0.9)',  // halbtransparentes Rot
+            width: 1.5,
+            type: 'dashed',
+            dashOffset: 0,                    // optional: Versatz der Striche
+          },
+          label: {
+            show: true,
+            formatter: (params: AxisPointerLabelParams) => {
+              if (params.axisDimension === 'x') {
+                const time = params.value as number;
+                return time.toFixed(0) + " s";
+              }
+
+              if (params.axisDimension === 'y') {
+                const vSpeed = params.value as number;
+                return vSpeed.toFixed(1) + " m/s";
+
+              }
+            }
+          }
+        },
         formatter: (params: any[]) => {
           const p = params[0]; // erste Serie (Höhe)
           const vSpeed = p.value[1].toFixed(1);
@@ -277,7 +355,30 @@ export default function FlightDetailsRoute() {
       ...baseOption,
       tooltip: {
         trigger: "axis",
-        axisPointer: { type: "cross" },
+        axisPointer: {
+          type: "cross",
+          lineStyle: {
+            color: 'rgba(255, 77, 79, 0.9)',  // halbtransparentes Rot
+            width: 1.5,
+            type: 'dashed',
+            dashOffset: 0,                    // optional: Versatz der Striche
+          },
+          label: {
+            show: true,
+            formatter: (params: AxisPointerLabelParams) => {
+              if (params.axisDimension === 'x') {
+                const time = params.value as number;
+                return time.toFixed(0) + " s";
+              }
+
+              if (params.axisDimension === 'y') {
+                const speed = params.value as number;
+                return speed.toFixed(0) + " m/s";
+
+              }
+            }
+          }
+        },
         formatter: (params: any[]) => {
           const p = params[0]; // erste Serie (Höhe)
           const vSpeed = p.value[1].toFixed(1);
