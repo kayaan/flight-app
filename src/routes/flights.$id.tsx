@@ -48,6 +48,48 @@ interface AxisPointerLabelParams {
   [key: string]: any;
 }
 
+
+const axisPointerLabelFormatter = (params: AxisPointerLabelParams) => {
+  const v = params.value as any;
+
+  if (params.axisDimension === "x") {
+    // v kann number|string|Date sein, aber bei value-axis ist es normalerweise number
+    const t = typeof v === "number" ? v : Number(v);
+    if (!Number.isFinite(t)) return "";
+    return `${Math.round(t)} s`;
+  }
+
+  if (params.axisDimension === "y") {
+    const h = typeof v === "number" ? v : Number(v);
+    if (!Number.isFinite(h)) return "";
+    return `${Math.round(h)} m`;
+  }
+
+  return "";
+};
+
+
+const ALT_AXIS_POINTER = {
+  type: "cross",
+  lineStyle: {
+    color: "rgba(255, 77, 79, 0.9)",
+    width: 1.5,
+    type: "dashed",
+    dashOffset: 0,
+  },
+  label: {
+    show: true,
+    formatter: axisPointerLabelFormatter,
+  },
+} as const;
+
+const ALT_GRID = { left: 56, right: 16, top: 24, bottom: 40 } as const;
+
+const ALT_DATAZOOM = [
+  { type: "inside", xAxisIndex: 0 },
+  { type: "slider", xAxisIndex: 0, height: 20, bottom: 8 },
+] as const;
+
 export const Route = createFileRoute("/flights/$id")({
   component: FlightDetailsRoute,
 });
@@ -242,46 +284,41 @@ export default function FlightDetailsRoute() {
     };
   }, []);
 
+  const altitudeTooltipFormatter = (params: any[]) => {
+    const y = params?.[0]?.value?.[1];
+    const h = typeof y === "number" ? y : Number(y);
+    if (!Number.isFinite(h)) return "";
+    return `<strong>${Math.round(h)} m</strong>`;
+  };
+
+
+
+  // inside component:
   const altOption = React.useMemo(() => {
     if (!chartData) return {};
+
     return {
       ...baseOption,
       tooltip: {
         trigger: "axis",
-        axisPointer: {
-          type: "cross",
-          lineStyle: {
-            color: 'rgba(255, 77, 79, 0.9)',  // halbtransparentes Rot
-            width: 1.5,
-            type: 'dashed',
-            dashOffset: 0,                    // optional: Versatz der Striche
-          },
-          label: {
-            show: true,
-            formatter: (params: AxisPointerLabelParams) => {
-              if (params.axisDimension === 'x') {
-                const time = params.value as number;
-                return time.toFixed(0) + " s";
-              }
-
-              if (params.axisDimension === 'y') {
-                const height = params.value as number;
-                return height.toFixed(0) + " m";
-
-              }
-            }
-          }
-        },
-        formatter: (params: any[]) => {
-          const y = params?.[0]?.value?.[1];
-          if (y == null) return "";
-          return `<strong>${Math.round(y)} m</strong>`;
-        }
+        axisPointer: ALT_AXIS_POINTER,
+        formatter: altitudeTooltipFormatter,
       },
-      grid: { left: 56, right: 16, top: 24, bottom: 40 },
-      xAxis: { type: "value", min: 0, max: chartData.maxT, axisLabel: { formatter: (v: number) => fmtTime(v) } },
-      yAxis: { type: "value", name: "m", min: chartData.altMin, max: chartData.altMax, scale: true },
-      dataZoom: [{ type: "inside", xAxisIndex: 0 }, { type: "slider", xAxisIndex: 0, height: 20, bottom: 8 }],
+      grid: ALT_GRID,
+      xAxis: {
+        type: "value",
+        min: 0,
+        max: chartData.maxT,
+        axisLabel: { formatter: (v: number) => fmtTime(v) }, // ok, kann so bleiben
+      },
+      yAxis: {
+        type: "value",
+        name: "m",
+        min: chartData.altMin,
+        max: chartData.altMax,
+        scale: true,
+      },
+      dataZoom: ALT_DATAZOOM,
       series: [
         {
           name: "Altitude",
@@ -289,8 +326,8 @@ export default function FlightDetailsRoute() {
           data: chartData.alt,
           showSymbol: false,
           lineStyle: { width: 2 },
-
-        }],
+        },
+      ],
     };
   }, [chartData, baseOption]);
 
