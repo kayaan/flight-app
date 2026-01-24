@@ -199,7 +199,10 @@ export default function FlightDetailsRoute() {
   const baseOption = React.useMemo(() => {
     return {
       animation: false,
-      tooltip: { trigger: "axis", axisPointer: { type: "cross" } },
+      tooltip: {
+        trigger: "axis",
+        axisPointer: { type: "cross" }
+      },
       axisPointer: {
         snap: true,
         link: [{ xAxisIndex: "all" }],
@@ -211,6 +214,19 @@ export default function FlightDetailsRoute() {
     if (!chartData) return {};
     return {
       ...baseOption,
+      tooltip: {
+        trigger: "axis",
+        axisPointer: { type: "cross" },
+        formatter: (params: any[]) => {
+          const p = params[0]; // erste Serie (Höhe)
+          const height = Math.round(p.value[1]);
+
+          return `
+                <div>
+                  <strong>${height} m</strong>
+              `;
+        }
+      },
       grid: { left: 56, right: 16, top: 24, bottom: 40 },
       xAxis: { type: "value", min: 0, max: chartData.maxT, axisLabel: { formatter: (v: number) => fmtTime(v) } },
       yAxis: { type: "value", name: "m", min: chartData.altMin, max: chartData.altMax, scale: true },
@@ -223,6 +239,19 @@ export default function FlightDetailsRoute() {
     if (!chartData) return {};
     return {
       ...baseOption,
+      tooltip: {
+        trigger: "axis",
+        axisPointer: { type: "cross" },
+        formatter: (params: any[]) => {
+          const p = params[0]; // erste Serie (Höhe)
+          const vSpeed = p.value[1].toFixed(1);
+
+          return `
+                <div>
+                  <strong>${vSpeed} m/s</strong>
+              `;
+        }
+      },
       grid: { left: 56, right: 16, top: 24, bottom: 24 },
       xAxis: { type: "value", min: 0, max: chartData.maxT, axisLabel: { formatter: (v: number) => fmtTime(v) } },
       yAxis: { type: "value", name: "m/s", min: chartData.vMin, max: chartData.vMax, scale: true },
@@ -246,6 +275,19 @@ export default function FlightDetailsRoute() {
     if (!chartData) return {};
     return {
       ...baseOption,
+      tooltip: {
+        trigger: "axis",
+        axisPointer: { type: "cross" },
+        formatter: (params: any[]) => {
+          const p = params[0]; // erste Serie (Höhe)
+          const vSpeed = p.value[1].toFixed(1);
+
+          return `
+                <div>
+                  <strong>${vSpeed} km/h</strong>
+              `;
+        }
+      },
       grid: { left: 56, right: 16, top: 24, bottom: 24 },
       xAxis: { type: "value", min: 0, max: chartData.maxT, axisLabel: { formatter: (v: number) => fmtTime(v) } },
       yAxis: { type: "value", name: "km/h", scale: true },
