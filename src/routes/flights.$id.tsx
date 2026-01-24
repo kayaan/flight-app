@@ -149,19 +149,6 @@ export default function FlightDetailsRoute() {
   const token = useAuthStore((s) => s.token);
   const { id } = Route.useParams();
 
-  const setHover = useFlightHoverStore((s) => s.setHoverTSecThrottled);
-  const hoverEvents = React.useMemo(
-    () => ({
-      updateAxisPointer: (e: any) => {
-        const x = e?.axesInfo?.[0]?.value;
-        if (typeof x === "number" && Number.isFinite(x)) setHover(x);
-      },
-      globalout: () => {
-        setHover(null); // trailing null wie in der ersten Version
-      },
-    }),
-    [setHover]
-  );
 
   const setHoverTSecThrottled = useFlightHoverStore(s => s.setHoverTSecThrottled);
   const clearNow = useFlightHoverStore(s => s.clearNow);

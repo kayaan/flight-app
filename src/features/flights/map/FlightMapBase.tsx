@@ -1,15 +1,19 @@
 // src/features/flights/map/FlightMapBase.tsx
-// Standalone Map component (no imperative handle, no coupling to flights.$id.tsx)
+// Standalone Map component (hover marker updates imperatively via zustand subscribe)
+// ✅ Fixes UI jank: no React re-render on hover; no Popup; lightweight circleMarker
 
 import * as React from "react";
-import { MapContainer, TileLayer, Polyline, useMap, useMapEvents, Marker, Popup } from "react-leaflet";
-import { type LatLngTuple, type LatLngBoundsExpression, } from "leaflet";
+import {
+    MapContainer,
+    TileLayer,
+    Polyline,
+    useMap,
+    useMapEvents,
+} from "react-leaflet";
+import L, { type LatLngTuple, type LatLngBoundsExpression } from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { Box, Group, Text, RangeSlider } from "@mantine/core";
 import { useFlightHoverStore } from "../store/flightHover.store";
-
-import type { Marker as LeafletMarker } from "leaflet";
-import L from "leaflet";
 
 export type BaseMap = "osm" | "topo";
 
@@ -44,7 +48,8 @@ const TILE = {
     osm: {
         key: "osm",
         url: "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
-        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+        attribution:
+            '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
     },
     topo: {
         key: "topo",
@@ -161,7 +166,11 @@ function colorForVario(v: number) {
 
 type ColorChunk = { color: string; positions: LatLngTuple[] };
 
-function buildChunksFromFixesWindow(fixes: FixPoint[], startIdx: number, endIdx: number): ColorChunk[] {
+function buildChunksFromFixesWindow(
+    fixes: FixPoint[],
+    startIdx: number,
+    endIdx: number
+): ColorChunk[] {
     const n = fixes.length;
     if (n < 2) return [];
     const s = clamp(startIdx, 0, n - 2);
@@ -203,20 +212,120 @@ function computeBounds(points: LatLngTuple[]): LatLngBoundsExpression | null {
     return points as unknown as LatLngBoundsExpression;
 }
 
-function AutoPan({ pos }: { pos: { lat: number; lon: number } | null }) {
+/**
+ * ✅ Imperative hover marker:
+ * - created once (Leaflet circleMarker)
+ * - updates via zustand subscribe (no React re-render)
+ * - hidden when hoverTSec is null
+ */
+function HoverMarker({ fixes }: { fixes: FixPoint[] }) {
     const map = useMap();
 
-    React.useEffect(() => {
-        if (!pos) return;
-        const ll: [number, number] = [pos.lat, pos.lon];
+    const coreRef = React.useRef<L.CircleMarker | null>(null);
+    const haloRef = React.useRef<L.CircleMarker | null>(null);
 
-        if (!map.getBounds().contains(ll)) {
-            map.panTo(ll, { animate: true, duration: 0.25 });
-        }
-    }, [pos, map]);
+    const fixIndex = React.useMemo(() => {
+        const m = new Map<number, LatLngTuple>();
+        for (const f of fixes) m.set(Math.round(f.tSec), [f.lat, f.lon]);
+        return m;
+    }, [fixes]);
+
+    // pan throttling
+    const lastPanAtRef = React.useRef(0);
+
+    // create markers once
+    React.useEffect(() => {
+        if (coreRef.current || haloRef.current) return;
+
+        const halo = L.circleMarker([0, 0], {
+            radius: 12,
+            weight: 0,
+            opacity: 0,
+            fillOpacity: 0,
+            fillColor: "#ffffff",
+            interactive: false,
+        });
+
+        const core = L.circleMarker([0, 0], {
+            radius: 5,
+            weight: 2,
+            color: "#000000",
+            opacity: 0,
+            fillOpacity: 0,
+            fillColor: "#ffffff",
+            interactive: false,
+        });
+
+        halo.addTo(map);
+        core.addTo(map);
+
+        haloRef.current = halo;
+        coreRef.current = core;
+
+        return () => {
+            halo.remove();
+            core.remove();
+            haloRef.current = null;
+            coreRef.current = null;
+        };
+    }, [map]);
+
+    React.useEffect(() => {
+        const unsub = useFlightHoverStore.subscribe((state) => {
+            const t = state.hoverTSec;
+            const halo = haloRef.current;
+            const core = coreRef.current;
+            if (!halo || !core) return;
+
+            if (t == null) {
+                halo.setStyle({ opacity: 0, fillOpacity: 0 });
+                core.setStyle({ opacity: 0, fillOpacity: 0 });
+                return;
+            }
+
+            const pos = fixIndex.get(t);
+            if (!pos) return;
+
+            halo.setLatLng(pos);
+            core.setLatLng(pos);
+            halo.setStyle({ opacity: 1, fillOpacity: 0.35 });
+            core.setStyle({ opacity: 1, fillOpacity: 1 });
+
+            // ✅ Auto-pan only if not visible (with margin) and rate-limited
+            const now = Date.now();
+            if (now - lastPanAtRef.current < 120) return; // throttle pans
+            lastPanAtRef.current = now;
+
+            const ll = L.latLng(pos[0], pos[1]);
+
+            // "safe area" bounds: shrink current bounds by pixel margin
+            const marginPx = 40;
+            const b = map.getBounds();
+            const nw = map.latLngToContainerPoint(b.getNorthWest());
+            const se = map.latLngToContainerPoint(b.getSouthEast());
+
+            const safeNW = L.point(nw.x + marginPx, nw.y + marginPx);
+            const safeSE = L.point(se.x - marginPx, se.y - marginPx);
+
+            // if viewport is tiny, skip
+            if (safeSE.x <= safeNW.x || safeSE.y <= safeNW.y) return;
+
+            const safeBounds = L.latLngBounds(
+                map.containerPointToLatLng(safeNW),
+                map.containerPointToLatLng(safeSE)
+            );
+
+            if (!safeBounds.contains(ll)) {
+                map.panTo(ll, { animate: true, duration: 0.25 });
+            }
+        });
+
+        return unsub;
+    }, [fixIndex, map]);
 
     return null;
 }
+
 
 export function FlightMap({
     baseMap = "osm",
@@ -229,32 +338,6 @@ export function FlightMap({
 }) {
     const hasTrack = fixes.length >= 2;
     const initialZoom = hasTrack ? 13 : 11;
-
-    const hoverTSec = useFlightHoverStore(s => s.hoverTSec);
-
-    const fixByTSecRef = React.useRef<Map<number, { lat: number; lon: number }>>(new Map());
-
-    React.useEffect(() => {
-        const m = new Map<number, { lat: number; lon: number }>();
-        for (const f of fixes) {
-            m.set(Math.round(f.tSec), { lat: f.lat, lon: f.lon });
-        }
-        fixByTSecRef.current = m;
-    }, [fixes]);
-
-    const [hoverPos, setHoverPos] = React.useState<{ lat: number; lon: number } | null>(null);
-
-    React.useEffect(() => {
-        if (hoverTSec == null) {
-            setHoverPos(null);
-            return;
-        }
-
-        const pos = fixByTSecRef.current.get(hoverTSec);
-        if (pos) {
-            setHoverPos(pos);
-        }
-    }, [hoverTSec]);
 
     const [zoom, setZoom] = React.useState<number>(initialZoom);
     React.useEffect(() => setZoom(initialZoom), [initialZoom]);
@@ -319,12 +402,15 @@ export function FlightMap({
             />
 
             <Box style={{ flex: 1, minHeight: 0 }}>
-                <MapContainer center={center} zoom={initialZoom} style={{ height: "100%", width: "100%" }} preferCanvas>
-
-                    {/* <AutoPan pos={hoverPos} /> */}
-
+                <MapContainer
+                    center={center}
+                    zoom={initialZoom}
+                    style={{ height: "100%", width: "100%" }}
+                    preferCanvas
+                >
                     <TileLayer key={tile.key} url={tile.url} attribution={tile.attribution} />
 
+                    {/* Base (faint) track */}
                     {fullPoints.length >= 2 && (
                         <Polyline
                             positions={fullPoints}
@@ -338,14 +424,10 @@ export function FlightMap({
                         />
                     )}
 
-                    {hoverPos && (
-                        <Marker position={[hoverPos.lat, hoverPos.lon]}>
-                            <Popup>
-                                t = {hoverTSec}s
-                            </Popup>
-                        </Marker>
-                    )}
+                    {/* ✅ Hover marker (imperative, no React re-render on hover) */}
+                    <HoverMarker fixes={fixes} />
 
+                    {/* Colored chunks: outline + main line */}
                     {colorChunks.map((ch, i) => (
                         <Polyline
                             key={`o-${i}`}
