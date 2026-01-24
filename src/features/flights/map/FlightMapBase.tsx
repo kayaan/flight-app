@@ -2,10 +2,14 @@
 // Standalone Map component (no imperative handle, no coupling to flights.$id.tsx)
 
 import * as React from "react";
-import { MapContainer, TileLayer, Polyline, useMap, useMapEvents } from "react-leaflet";
-import type { LatLngTuple, LatLngBoundsExpression } from "leaflet";
+import { MapContainer, TileLayer, Polyline, useMap, useMapEvents, Marker, Popup } from "react-leaflet";
+import { type LatLngTuple, type LatLngBoundsExpression, } from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { Box, Group, Text, RangeSlider } from "@mantine/core";
+import { useFlightHoverStore } from "../store/flightHover.store";
+
+import type { Marker as LeafletMarker } from "leaflet";
+import L from "leaflet";
 
 export type BaseMap = "osm" | "topo";
 
@@ -199,6 +203,21 @@ function computeBounds(points: LatLngTuple[]): LatLngBoundsExpression | null {
     return points as unknown as LatLngBoundsExpression;
 }
 
+function AutoPan({ pos }: { pos: { lat: number; lon: number } | null }) {
+    const map = useMap();
+
+    React.useEffect(() => {
+        if (!pos) return;
+        const ll: [number, number] = [pos.lat, pos.lon];
+
+        if (!map.getBounds().contains(ll)) {
+            map.panTo(ll, { animate: true, duration: 0.25 });
+        }
+    }, [pos, map]);
+
+    return null;
+}
+
 export function FlightMap({
     baseMap = "osm",
     watchKey,
@@ -210,6 +229,32 @@ export function FlightMap({
 }) {
     const hasTrack = fixes.length >= 2;
     const initialZoom = hasTrack ? 13 : 11;
+
+    const hoverTSec = useFlightHoverStore(s => s.hoverTSec);
+
+    const fixByTSecRef = React.useRef<Map<number, { lat: number; lon: number }>>(new Map());
+
+    React.useEffect(() => {
+        const m = new Map<number, { lat: number; lon: number }>();
+        for (const f of fixes) {
+            m.set(Math.round(f.tSec), { lat: f.lat, lon: f.lon });
+        }
+        fixByTSecRef.current = m;
+    }, [fixes]);
+
+    const [hoverPos, setHoverPos] = React.useState<{ lat: number; lon: number } | null>(null);
+
+    React.useEffect(() => {
+        if (hoverTSec == null) {
+            setHoverPos(null);
+            return;
+        }
+
+        const pos = fixByTSecRef.current.get(hoverTSec);
+        if (pos) {
+            setHoverPos(pos);
+        }
+    }, [hoverTSec]);
 
     const [zoom, setZoom] = React.useState<number>(initialZoom);
     React.useEffect(() => setZoom(initialZoom), [initialZoom]);
@@ -275,6 +320,9 @@ export function FlightMap({
 
             <Box style={{ flex: 1, minHeight: 0 }}>
                 <MapContainer center={center} zoom={initialZoom} style={{ height: "100%", width: "100%" }} preferCanvas>
+
+                    {/* <AutoPan pos={hoverPos} /> */}
+
                     <TileLayer key={tile.key} url={tile.url} attribution={tile.attribution} />
 
                     {fullPoints.length >= 2 && (
@@ -288,6 +336,14 @@ export function FlightMap({
                                 lineJoin: "round",
                             }}
                         />
+                    )}
+
+                    {hoverPos && (
+                        <Marker position={[hoverPos.lat, hoverPos.lon]}>
+                            <Popup>
+                                t = {hoverTSec}s
+                            </Popup>
+                        </Marker>
                     )}
 
                     {colorChunks.map((ch, i) => (

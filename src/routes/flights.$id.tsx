@@ -13,6 +13,7 @@ import { flightApi } from "../features/flights/flights.api";
 import type { SeriesPoint } from "../features/flights/igc";
 
 import { FlightMap, type FixPoint, type BaseMap } from "../features/flights/map/FlightMapBase";
+import { useFlightHoverStore } from "../features/flights/store/flightHover.store";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -129,9 +130,63 @@ function calculateVSpeedFromSeries(points: SeriesPoint[]): [number, number][] {
   return result;
 }
 
+function extractTSec(params: any): number | null {
+  // häufig: params.value = [x, y]
+  const v = params?.value ?? params?.data?.value ?? params?.data;
+
+  if (Array.isArray(v)) {
+    const x = v[0];
+    return typeof x === "number" && Number.isFinite(x) ? x : null;
+  }
+
+  // falls du irgendwann nur x als number bekommst
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+
+  return null;
+}
+
 export default function FlightDetailsRoute() {
   const token = useAuthStore((s) => s.token);
   const { id } = Route.useParams();
+
+  const setHover = useFlightHoverStore((s) => s.setHoverTSecThrottled);
+  const hoverEvents = React.useMemo(
+    () => ({
+      updateAxisPointer: (e: any) => {
+        const x = e?.axesInfo?.[0]?.value;
+        if (typeof x === "number" && Number.isFinite(x)) setHover(x);
+      },
+      globalout: () => {
+        setHover(null); // trailing null wie in der ersten Version
+      },
+    }),
+    [setHover]
+  );
+
+  const setHoverTSecThrottled = useFlightHoverStore(s => s.setHoverTSecThrottled);
+  const clearNow = useFlightHoverStore(s => s.clearNow);
+
+  const chartEvents = React.useMemo(() => {
+    return {
+      mousemove: (params: any) => {
+        const t = extractTSec(params);
+        if (t != null) setHoverTSecThrottled(t);
+      },
+
+      // besser, wenn tooltip.trigger = 'axis' genutzt wird
+      updateAxisPointer: (e: any) => {
+        const ax = e?.axesInfo?.[0];
+        const t = ax?.value;
+        if (typeof t === "number" && Number.isFinite(t)) setHoverTSecThrottled(t);
+      },
+
+      // wenn Maus rausgeht: sofort clear + trailing cancel
+      globalout: () => {
+        clearNow();
+      },
+    } as const;
+  }, [setHoverTSecThrottled, clearNow]);
+
 
   const [flight, setFlight] = React.useState<FlightRecordDetails | null>(null);
   const [busy, setBusy] = React.useState(false);
@@ -290,8 +345,6 @@ export default function FlightDetailsRoute() {
     if (!Number.isFinite(h)) return "";
     return `<strong>${Math.round(h)} m</strong>`;
   };
-
-
 
   // inside component:
   const altOption = React.useMemo(() => {
@@ -515,6 +568,7 @@ export default function FlightDetailsRoute() {
                     Altitude
                   </Text>
                   <EChartsReact
+                    onEvents={chartEvents}
                     echarts={echarts}
                     option={altOption}
                     style={{ height: 320, width: "100%" }}
@@ -532,6 +586,7 @@ export default function FlightDetailsRoute() {
                     Vertical speed (Vario)
                   </Text>
                   <EChartsReact
+                    onEvents={chartEvents}
                     echarts={echarts}
                     option={varioOption}
                     style={{ height: 220, width: "100%" }}
@@ -549,6 +604,7 @@ export default function FlightDetailsRoute() {
                     Horizontal speed
                   </Text>
                   <EChartsReact
+                    onEvents={chartEvents}
                     echarts={echarts}
                     option={speedOption}
                     style={{ height: 220, width: "100%" }}
