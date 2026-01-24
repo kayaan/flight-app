@@ -150,6 +150,26 @@ export default function FlightDetailsRoute() {
   const { id } = Route.useParams();
 
 
+  const FOLLOW_KEY = "flyapp.flightDetails.followMarker";
+
+  const [followEnabled, setFollowEnabled] = React.useState<boolean>(() => {
+    try {
+      const raw = localStorage.getItem(FOLLOW_KEY);
+      if (raw == null) return true; // default ON
+      return raw === "1";
+    } catch {
+      return true;
+    }
+  });
+
+  React.useEffect(() => {
+    try {
+      localStorage.setItem(FOLLOW_KEY, followEnabled ? "1" : "0");
+    } catch {
+      // ignore
+    }
+  }, [followEnabled]);
+
   const setHoverTSecThrottled = useFlightHoverStore(s => s.setHoverTSecThrottled);
   const clearNow = useFlightHoverStore(s => s.clearNow);
 
@@ -517,7 +537,13 @@ export default function FlightDetailsRoute() {
           <Group gap="md">
             <Checkbox label="Topo" checked={baseMap === "topo"} onChange={(e) => setBaseMap(e.currentTarget.checked ? "topo" : "osm")} />
             <Checkbox label="Charts sync" checked={syncEnabled} onChange={(e) => setSyncEnabled(e.currentTarget.checked)} />
+            <Checkbox
+              label="Follow marker"
+              checked={followEnabled}
+              onChange={(e) => setFollowEnabled(e.currentTarget.checked)}
+            />
           </Group>
+
         </Group>
 
         {busy && <Text c="dimmed">Loading...</Text>}
@@ -628,7 +654,12 @@ export default function FlightDetailsRoute() {
                 Map
               </Text>
               <Box style={{ flex: 1, minHeight: 0 }}>
-                <FlightMap fixes={computed.fixes} baseMap={baseMap} watchKey={`${id}-${baseMap}`} />
+                <FlightMap
+                  fixes={computed.fixes}
+                  baseMap={baseMap}
+                  watchKey={`${id}-${baseMap}`}
+                  followEnabled={followEnabled}
+                />
               </Box>
             </Box>
           </Box>

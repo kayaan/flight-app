@@ -149,7 +149,6 @@ function upperBoundTSec(fixes: FixPoint[], tSec: number) {
 
 function colorForVario(v: number) {
     const a = Math.abs(v);
-    if (a < 0.5) return "#60a5fa";
 
     const level = a < 2 ? 1 : a < 3 ? 2 : 3;
 
@@ -218,7 +217,13 @@ function computeBounds(points: LatLngTuple[]): LatLngBoundsExpression | null {
  * - updates via zustand subscribe (no React re-render)
  * - hidden when hoverTSec is null
  */
-function HoverMarker({ fixes }: { fixes: FixPoint[] }) {
+function HoverMarker({
+    fixes,
+    followEnabled,
+}: {
+    fixes: FixPoint[];
+    followEnabled: boolean;
+}) {
     const map = useMap();
 
     const coreRef = React.useRef<L.CircleMarker | null>(null);
@@ -229,6 +234,12 @@ function HoverMarker({ fixes }: { fixes: FixPoint[] }) {
         for (const f of fixes) m.set(Math.round(f.tSec), [f.lat, f.lon]);
         return m;
     }, [fixes]);
+
+    // keep latest toggle without resubscribing
+    const followRef = React.useRef<boolean>(followEnabled);
+    React.useEffect(() => {
+        followRef.current = followEnabled;
+    }, [followEnabled]);
 
     // pan throttling
     const lastPanAtRef = React.useRef(0);
@@ -270,6 +281,7 @@ function HoverMarker({ fixes }: { fixes: FixPoint[] }) {
         };
     }, [map]);
 
+    // subscribe to hoverTSec (no React state!)
     React.useEffect(() => {
         const unsub = useFlightHoverStore.subscribe((state) => {
             const t = state.hoverTSec;
@@ -291,14 +303,17 @@ function HoverMarker({ fixes }: { fixes: FixPoint[] }) {
             halo.setStyle({ opacity: 1, fillOpacity: 0.35 });
             core.setStyle({ opacity: 1, fillOpacity: 1 });
 
-            // ✅ Auto-pan only if not visible (with margin) and rate-limited
+            // ✅ toggle: only pan when followEnabled
+            if (!followRef.current) return;
+
+            // ✅ pan only if not visible (with margin) + rate-limited
             const now = Date.now();
-            if (now - lastPanAtRef.current < 120) return; // throttle pans
+            if (now - lastPanAtRef.current < 120) return;
             lastPanAtRef.current = now;
 
             const ll = L.latLng(pos[0], pos[1]);
 
-            // "safe area" bounds: shrink current bounds by pixel margin
+            // safe viewport margin in pixels
             const marginPx = 40;
             const b = map.getBounds();
             const nw = map.latLngToContainerPoint(b.getNorthWest());
@@ -307,7 +322,7 @@ function HoverMarker({ fixes }: { fixes: FixPoint[] }) {
             const safeNW = L.point(nw.x + marginPx, nw.y + marginPx);
             const safeSE = L.point(se.x - marginPx, se.y - marginPx);
 
-            // if viewport is tiny, skip
+            // avoid degenerate bounds
             if (safeSE.x <= safeNW.x || safeSE.y <= safeNW.y) return;
 
             const safeBounds = L.latLngBounds(
@@ -331,10 +346,12 @@ export function FlightMap({
     baseMap = "osm",
     watchKey,
     fixes,
+    followEnabled = true
 }: {
     baseMap?: BaseMap;
     watchKey?: unknown;
     fixes: FixPoint[];
+    followEnabled: boolean
 }) {
     const hasTrack = fixes.length >= 2;
     const initialZoom = hasTrack ? 13 : 11;
@@ -378,7 +395,7 @@ export function FlightMap({
 
     const { line, outlineExtra, outlineOpacity } = React.useMemo(() => weightsForZoom(zoom), [zoom]);
     const outlineWeight = line + outlineExtra;
-    const OUTLINE = "rgba(20,20,25,0.45)";
+    const OUTLINE = "rgba(0, 0, 0, 0.51)";
 
     const tile = TILE[baseMap];
 
@@ -425,7 +442,7 @@ export function FlightMap({
                     )}
 
                     {/* ✅ Hover marker (imperative, no React re-render on hover) */}
-                    <HoverMarker fixes={fixes} />
+                    <HoverMarker fixes={fixes} followEnabled={followEnabled} />
 
                     {/* Colored chunks: outline + main line */}
                     {colorChunks.map((ch, i) => (
