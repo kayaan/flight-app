@@ -1,7 +1,7 @@
 // flights.$id.tsx
 import * as React from "react";
 import { createFileRoute } from "@tanstack/react-router";
-import { Box, Stack, Text, Alert, Button, Group, Checkbox } from "@mantine/core";
+import { Box, Stack, Text, Alert, Button, Group, Checkbox, SimpleGrid, Paper } from "@mantine/core";
 import { IconAlertCircle } from "@tabler/icons-react";
 import EChartsReact from "echarts-for-react";
 import * as echarts from "echarts";
@@ -19,43 +19,24 @@ import { useTimeWindowStore } from "../features/flights/store/timeWindow.store";
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 interface AxisPointerLabelParams {
-  /**
-   * Der Wert der Achse an der aktuellen Maus-Position
-   */
   value: number | string | Date;
-
-  /**
-   * Welche Achse ('x', 'y', manchmal 'z' oder 'angle'/'radius' bei Polar)
-   */
-  axisDimension: 'x' | 'y' | 'z' | string;
-
-  /**
-   * Index der Achse (0, 1, ... bei mehreren x/y-Achsen)
-   */
+  axisDimension: "x" | "y" | "z" | string;
   axisIndex: number;
-
-  /**
-   * Die Datenpunkte der Serien an dieser Position (meist 1 pro Serie)
-   */
   seriesData: Array<{
     seriesName?: string;
-    value: any;                    // number | number[] | ...
+    value: any;
     dataIndex?: number;
     axisValue?: string | number;
     axisValueLabel?: string;
-    // Füge bei Bedarf mehr Felder hinzu (color, marker, ...)
+    [key: string]: any;
   }>;
-
-  // Optional: Manchmal noch weitere interne Felder
   [key: string]: any;
 }
-
 
 const axisPointerLabelFormatter = (params: AxisPointerLabelParams) => {
   const v = params.value as any;
 
   if (params.axisDimension === "x") {
-    // v kann number|string|Date sein, aber bei value-axis ist es normalerweise number
     const t = typeof v === "number" ? v : Number(v);
     if (!Number.isFinite(t)) return "";
     return `${Math.round(t)} s`;
@@ -70,33 +51,21 @@ const axisPointerLabelFormatter = (params: AxisPointerLabelParams) => {
   return "";
 };
 
-
-function buildWindowMarkLine(
-  startSec: number,
-  endSec: number,
-  totalSec: number
-) {
-  // kleiner Puffer gegen Rundungsflackern
+function buildWindowMarkLine(startSec: number, endSec: number, totalSec: number) {
   const eps = 0.5;
-
-  const isFull =
-    startSec <= eps && endSec >= totalSec - eps;
-
+  const isFull = startSec <= eps && endSec >= totalSec - eps;
   if (isFull || totalSec <= 0) return undefined;
 
   return {
     symbol: "none",
     label: { show: false },
     lineStyle: {
-      color: "rgba(18, 230, 106, 0.9)", // ✅ blau (wie du wolltest)
+      color: "rgba(18, 230, 106, 0.9)", // grün
       width: 2,
       type: "dashed",
       dashOffset: 0,
     },
-    data: [
-      { xAxis: startSec },
-      { xAxis: endSec },
-    ],
+    data: [{ xAxis: startSec }, { xAxis: endSec }],
   };
 }
 
@@ -120,6 +89,8 @@ const ALT_DATAZOOM = [
   { type: "inside", xAxisIndex: 0 },
   { type: "slider", xAxisIndex: 0, height: 20, bottom: 8 },
 ] as const;
+
+const INSIDE_ZOOM = [{ type: "inside", xAxisIndex: 0 }] as const;
 
 export const Route = createFileRoute("/flights/$id")({
   component: FlightDetailsRoute,
@@ -161,7 +132,6 @@ function calculateVSpeedFromSeries(points: SeriesPoint[]): [number, number][] {
 }
 
 function extractTSec(params: any): number | null {
-  // häufig: params.value = [x, y]
   const v = params?.value ?? params?.data?.value ?? params?.data;
 
   if (Array.isArray(v)) {
@@ -169,23 +139,250 @@ function extractTSec(params: any): number | null {
     return typeof x === "number" && Number.isFinite(x) ? x : null;
   }
 
-  // falls du irgendwann nur x als number bekommst
   if (typeof v === "number" && Number.isFinite(v)) return v;
-
   return null;
+}
+
+function lowerBoundSeries(points: SeriesPoint[], tSec: number) {
+  let lo = 0;
+  let hi = points.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (points[mid].tSec < tSec) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+function upperBoundSeries(points: SeriesPoint[], tSec: number) {
+  let lo = 0;
+  let hi = points.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (points[mid].tSec <= tSec) lo = mid + 1;
+    else hi = mid;
+  }
+  return Math.max(0, lo - 1);
+}
+
+type SegmentStats = {
+  hasSegment: boolean;
+
+  durSec: number;
+
+  altStart: number | null;
+  altEnd: number | null;
+  dAlt: number | null;
+  altMin: number | null;
+  altMax: number | null;
+
+  vAvg: number | null;
+  vMax: number | null;
+  vMin: number | null;
+
+  speedAvgKmh: number | null;
+  speedMaxKmh: number | null;
+
+  pctClimb: number | null;
+  pctSink: number | null;
+  pctGlide: number | null;
+
+  longestClimbDurSec: number | null;
+  longestClimbDAlt: number | null;
+};
+
+function computeSegmentStats(series: SeriesPoint[], startSec: number, endSec: number): SegmentStats {
+  const s = Math.max(0, Math.min(startSec, endSec));
+  const e = Math.max(0, Math.max(startSec, endSec));
+  const durSec = Math.max(0, e - s);
+
+  if (!series.length || durSec <= 0) {
+    return {
+      hasSegment: false,
+      durSec,
+      altStart: null,
+      altEnd: null,
+      dAlt: null,
+      altMin: null,
+      altMax: null,
+      vAvg: null,
+      vMax: null,
+      vMin: null,
+      speedAvgKmh: null,
+      speedMaxKmh: null,
+      pctClimb: null,
+      pctSink: null,
+      pctGlide: null,
+      longestClimbDurSec: null,
+      longestClimbDAlt: null,
+    };
+  }
+
+  const i0 = clamp(lowerBoundSeries(series, s), 0, series.length - 1);
+  const i1 = clamp(upperBoundSeries(series, e), 0, series.length - 1);
+
+  if (i1 <= i0) {
+    const p = series[i0];
+    return {
+      hasSegment: true,
+      durSec,
+      altStart: p.altitudeM,
+      altEnd: p.altitudeM,
+      dAlt: 0,
+      altMin: p.altitudeM,
+      altMax: p.altitudeM,
+      vAvg: 0,
+      vMax: 0,
+      vMin: 0,
+      speedAvgKmh: p.gSpeedKmh ?? null,
+      speedMaxKmh: p.gSpeedKmh ?? null,
+      pctClimb: 0,
+      pctSink: 0,
+      pctGlide: 100,
+      longestClimbDurSec: 0,
+      longestClimbDAlt: 0,
+    };
+  }
+
+  const altStart = series[i0].altitudeM;
+  const altEnd = series[i1].altitudeM;
+
+  let altMin = Number.POSITIVE_INFINITY;
+  let altMax = Number.NEGATIVE_INFINITY;
+
+  let vSum = 0;
+  let vDtSum = 0;
+  let vMax = Number.NEGATIVE_INFINITY;
+  let vMin = Number.POSITIVE_INFINITY;
+
+  let speedSum = 0;
+  let speedDtSum = 0;
+  let speedMax = Number.NEGATIVE_INFINITY;
+
+  // Phase-Analyse
+  const CLIMB_TH = 0.5; // m/s
+  const SINK_TH = -0.7; // m/s
+
+  let climbTime = 0;
+  let sinkTime = 0;
+  let glideTime = 0;
+
+  // Longest climb block
+  let curClimbT = 0;
+  let curClimbStartAlt: number | null = null;
+  let bestClimbT = 0;
+  let bestClimbDAlt = 0;
+
+  for (let i = i0; i < i1; i++) {
+    const a = series[i];
+    const b = series[i + 1];
+
+    const tA = a.tSec;
+    const tB = b.tSec;
+
+    const segStart = Math.max(tA, s);
+    const segEnd = Math.min(tB, e);
+    const dt = segEnd - segStart;
+    if (dt <= 0) continue;
+
+    // min/max altitude (über Punkte im Segment)
+    altMin = Math.min(altMin, a.altitudeM, b.altitudeM);
+    altMax = Math.max(altMax, a.altitudeM, b.altitudeM);
+
+    // vario über (a->b)
+    const denom = tB - tA;
+    const v = denom > 0 ? (b.altitudeM - a.altitudeM) / denom : 0;
+
+    vSum += v * dt;
+    vDtSum += dt;
+    vMax = Math.max(vMax, v);
+    vMin = Math.min(vMin, v);
+
+    // speed über a (gewichtete Mittelung)
+    const sp = typeof a.gSpeedKmh === "number" && Number.isFinite(a.gSpeedKmh) ? a.gSpeedKmh : NaN;
+    if (Number.isFinite(sp)) {
+      speedSum += sp * dt;
+      speedDtSum += dt;
+      speedMax = Math.max(speedMax, sp);
+    }
+
+    // phase time
+    if (v > CLIMB_TH) climbTime += dt;
+    else if (v < SINK_TH) sinkTime += dt;
+    else glideTime += dt;
+
+    // longest climb block (konsekutiv)
+    if (v > CLIMB_TH) {
+      if (curClimbStartAlt == null) curClimbStartAlt = a.altitudeM;
+      curClimbT += dt;
+    } else {
+      if (curClimbT > bestClimbT) {
+        bestClimbT = curClimbT;
+        const dAlt = curClimbStartAlt == null ? 0 : (a.altitudeM - curClimbStartAlt);
+        bestClimbDAlt = dAlt;
+      }
+      curClimbT = 0;
+      curClimbStartAlt = null;
+    }
+  }
+
+  // finalize last block
+  if (curClimbT > bestClimbT) {
+    bestClimbT = curClimbT;
+    const endAlt = series[i1].altitudeM;
+    const dAlt = curClimbStartAlt == null ? 0 : (endAlt - curClimbStartAlt);
+    bestClimbDAlt = dAlt;
+  }
+
+  const vAvg = vDtSum > 0 ? vSum / vDtSum : null;
+  const speedAvg = speedDtSum > 0 ? speedSum / speedDtSum : null;
+
+  const totalPhase = climbTime + sinkTime + glideTime;
+  const pctClimb = totalPhase > 0 ? (climbTime / totalPhase) * 100 : null;
+  const pctSink = totalPhase > 0 ? (sinkTime / totalPhase) * 100 : null;
+  const pctGlide = totalPhase > 0 ? (glideTime / totalPhase) * 100 : null;
+
+  return {
+    hasSegment: true,
+    durSec,
+
+    altStart,
+    altEnd,
+    dAlt: altEnd - altStart,
+    altMin: Number.isFinite(altMin) ? altMin : null,
+    altMax: Number.isFinite(altMax) ? altMax : null,
+
+    vAvg: vAvg != null ? vAvg : null,
+    vMax: Number.isFinite(vMax) ? vMax : null,
+    vMin: Number.isFinite(vMin) ? vMin : null,
+
+    speedAvgKmh: speedAvg != null ? speedAvg : null,
+    speedMaxKmh: Number.isFinite(speedMax) ? speedMax : null,
+
+    pctClimb,
+    pctSink,
+    pctGlide,
+
+    longestClimbDurSec: bestClimbT,
+    longestClimbDAlt: bestClimbDAlt,
+  };
+}
+
+function fmtSigned(n: number, digits = 0) {
+  const s = n >= 0 ? "+" : "";
+  return `${s}${n.toFixed(digits)}`;
 }
 
 export default function FlightDetailsRoute() {
   const token = useAuthStore((s) => s.token);
   const { id } = Route.useParams();
 
-
   const FOLLOW_KEY = "flyapp.flightDetails.followMarker";
+  const STATS_KEY = "flyapp.flightDetails.showStats";
 
   const [followEnabled, setFollowEnabled] = React.useState<boolean>(() => {
     try {
       const raw = localStorage.getItem(FOLLOW_KEY);
-      if (raw == null) return true; // default ON
+      if (raw == null) return true;
       return raw === "1";
     } catch {
       return true;
@@ -200,8 +397,26 @@ export default function FlightDetailsRoute() {
     }
   }, [followEnabled]);
 
-  const setHoverTSecThrottled = useFlightHoverStore(s => s.setHoverTSecThrottled);
-  const clearNow = useFlightHoverStore(s => s.clearNow);
+  const [showStats, setShowStats] = React.useState<boolean>(() => {
+    try {
+      const raw = localStorage.getItem(STATS_KEY);
+      if (raw == null) return true; // default ON
+      return raw === "1";
+    } catch {
+      return true;
+    }
+  });
+
+  React.useEffect(() => {
+    try {
+      localStorage.setItem(STATS_KEY, showStats ? "1" : "0");
+    } catch {
+      // ignore
+    }
+  }, [showStats]);
+
+  const setHoverTSecThrottled = useFlightHoverStore((s) => s.setHoverTSecThrottled);
+  const clearNow = useFlightHoverStore((s) => s.clearNow);
 
   const chartEvents = React.useMemo(() => {
     return {
@@ -209,21 +424,16 @@ export default function FlightDetailsRoute() {
         const t = extractTSec(params);
         if (t != null) setHoverTSecThrottled(t);
       },
-
-      // besser, wenn tooltip.trigger = 'axis' genutzt wird
       updateAxisPointer: (e: any) => {
         const ax = e?.axesInfo?.[0];
         const t = ax?.value;
         if (typeof t === "number" && Number.isFinite(t)) setHoverTSecThrottled(t);
       },
-
-      // wenn Maus rausgeht: sofort clear + trailing cancel
       globalout: () => {
         clearNow();
       },
     } as const;
   }, [setHoverTSecThrottled, clearNow]);
-
 
   const [flight, setFlight] = React.useState<FlightRecordDetails | null>(null);
   const [busy, setBusy] = React.useState(false);
@@ -231,20 +441,16 @@ export default function FlightDetailsRoute() {
 
   const [windowSec] = React.useState(calculationWindow);
 
-  // map options
   const [baseMap, setBaseMap] = React.useState<BaseMap>("topo");
 
-  // charts sync
   const [syncEnabled, setSyncEnabled] = React.useState(true);
   const chartGroupId = React.useMemo(() => `flight-${id}-charts`, [id]);
 
-  // hold actual echarts instances (reliable linking)
   const altInstRef = React.useRef<any>(null);
   const varioInstRef = React.useRef<any>(null);
   const speedInstRef = React.useRef<any>(null);
   const [chartsReadyTick, setChartsReadyTick] = React.useState(0);
 
-  // splitter
   const containerRef = React.useRef<HTMLDivElement | null>(null);
   const draggingRef = React.useRef(false);
   const [splitPct, setSplitPct] = React.useState<number>(60);
@@ -367,7 +573,7 @@ export default function FlightDetailsRoute() {
       animation: false,
       tooltip: {
         trigger: "axis",
-        axisPointer: { type: "cross" }
+        axisPointer: { type: "cross" },
       },
       axisPointer: {
         snap: true,
@@ -383,17 +589,22 @@ export default function FlightDetailsRoute() {
     return `<strong>${Math.round(h)} m</strong>`;
   };
 
+  // Time window from store (throttled updates)
   const win = useTimeWindowStore((s) => s.window);
   const startSec = win?.startSec ?? 0;
-  const endSec = win?.endSec ?? 0;   // durationSec bei dir vorhanden
-  const totalSec = win?.totalSec ?? 0;
+  const endSec = win?.endSec ?? 0;
+  const totalSec = win?.totalSec ?? (chartData?.maxT ?? 0);
 
   const windowMarkLine = React.useMemo(
     () => buildWindowMarkLine(startSec, endSec, totalSec),
     [startSec, endSec, totalSec]
   );
 
-  // inside component:
+  const segmentStats = React.useMemo(() => {
+    if (!computed?.series) return null;
+    return computeSegmentStats(computed.series, startSec, endSec);
+  }, [computed?.series, startSec, endSec]);
+
   const altOption = React.useMemo(() => {
     if (!chartData) return {};
 
@@ -409,7 +620,7 @@ export default function FlightDetailsRoute() {
         type: "value",
         min: 0,
         max: chartData.maxT,
-        axisLabel: { formatter: (v: number) => fmtTime(v) }, // ok, kann so bleiben
+        axisLabel: { formatter: (v: number) => fmtTime(v) },
       },
       yAxis: {
         type: "value",
@@ -429,10 +640,11 @@ export default function FlightDetailsRoute() {
           lineStyle: { width: 2 },
         },
         {
+          id: "__window",
           name: "__window",
           type: "line",
-          data: [],            // keine Daten
-          silent: true,        // keine Hover-Effekte
+          data: [],
+          silent: true,
           markLine: windowMarkLine,
         },
       ],
@@ -448,37 +660,36 @@ export default function FlightDetailsRoute() {
         axisPointer: {
           type: "cross",
           lineStyle: {
-            color: 'rgba(255, 77, 79, 0.9)',  // halbtransparentes Rot
+            color: "rgba(255, 77, 79, 0.9)",
             width: 1.5,
-            type: 'dashed',
-            dashOffset: 0,                    // optional: Versatz der Striche
+            type: "dashed",
+            dashOffset: 0,
           },
           label: {
             show: true,
             formatter: (params: AxisPointerLabelParams) => {
-              if (params.axisDimension === 'x') {
+              if (params.axisDimension === "x") {
                 const time = params.value as number;
                 return time.toFixed(0) + " s";
               }
-
-              if (params.axisDimension === 'y') {
+              if (params.axisDimension === "y") {
                 const vSpeed = params.value as number;
                 return vSpeed.toFixed(1) + " m/s";
-
               }
-            }
-          }
+              return "";
+            },
+          },
         },
         formatter: (params: any[]) => {
           const y = params?.[0]?.value?.[1];
           if (y == null) return "";
           return `<strong>${y.toFixed(1)} m/s</strong>`;
-        }
+        },
       },
       grid: { left: 56, right: 16, top: 24, bottom: 24 },
       xAxis: { type: "value", min: 0, max: chartData.maxT, axisLabel: { formatter: (v: number) => fmtTime(v) } },
       yAxis: { type: "value", name: "m/s", min: chartData.vMin, max: chartData.vMax, scale: true },
-      dataZoom: [{ type: "inside", xAxisIndex: 0 }],
+      dataZoom: INSIDE_ZOOM,
       series: [
         {
           id: "vario",
@@ -491,12 +702,12 @@ export default function FlightDetailsRoute() {
           smoothMonotone: "x",
           markLine: { symbol: ["none", "none"], lineStyle: { type: "dashed", opacity: 0.6 }, data: [{ yAxis: 0 }] },
         },
-
         {
+          id: "__window",
           name: "__window",
           type: "line",
-          data: [],            // keine Daten
-          silent: true,        // keine Hover-Effekte
+          data: [],
+          silent: true,
           markLine: windowMarkLine,
         },
       ],
@@ -512,70 +723,71 @@ export default function FlightDetailsRoute() {
         axisPointer: {
           type: "cross",
           lineStyle: {
-            color: 'rgba(255, 77, 79, 0.9)',  // halbtransparentes Rot
+            color: "rgba(255, 77, 79, 0.9)",
             width: 1.5,
-            type: 'dashed',
-            dashOffset: 0,                    // optional: Versatz der Striche
+            type: "dashed",
+            dashOffset: 0,
           },
           label: {
             show: true,
             formatter: (params: AxisPointerLabelParams) => {
-              if (params.axisDimension === 'x') {
+              if (params.axisDimension === "x") {
                 const time = params.value as number;
                 return time.toFixed(0) + " s";
               }
-
-              if (params.axisDimension === 'y') {
+              if (params.axisDimension === "y") {
                 const speed = params.value as number;
-                return speed.toFixed(0) + " m/s";
-
+                return speed.toFixed(0) + " km/h";
               }
-            }
-          }
+              return "";
+            },
+          },
         },
         formatter: (params: any[]) => {
           const y = params?.[0]?.value?.[1];
           if (y == null) return "";
           return `<strong>${y.toFixed(1)} km/h</strong>`;
-        }
+        },
       },
       grid: { left: 56, right: 16, top: 24, bottom: 24 },
       xAxis: { type: "value", min: 0, max: chartData.maxT, axisLabel: { formatter: (v: number) => fmtTime(v) } },
       yAxis: { type: "value", name: "km/h", scale: true },
-      dataZoom: [{ type: "inside", xAxisIndex: 0 }],
+      dataZoom: INSIDE_ZOOM,
       series: [
         {
           id: "speed",
-          name: "Ground speed", type: "line", data: chartData.hSpeed, showSymbol: false, lineStyle: { width: 2 },
+          name: "Ground speed",
+          type: "line",
+          data: chartData.hSpeed,
+          showSymbol: false,
+          lineStyle: { width: 2 },
         },
         {
+          id: "__window",
           name: "__window",
           type: "line",
-          data: [],            // keine Daten
-          silent: true,        // keine Hover-Effekte
+          data: [],
+          silent: true,
           markLine: windowMarkLine,
-        },],
+        },
+      ],
     };
   }, [chartData, baseOption, windowMarkLine]);
 
-  // Connect charts when all are ready
   React.useEffect(() => {
     const a = altInstRef.current;
     const v = varioInstRef.current;
     const s = speedInstRef.current;
 
-    // always clean up old group connections when id/group changes
     echarts.disconnect(chartGroupId);
 
     if (!syncEnabled) return;
     if (!a || !v || !s) return;
 
-    // ensure same group
     a.group = chartGroupId;
     v.group = chartGroupId;
     s.group = chartGroupId;
 
-    // connect by group id (robust)
     echarts.connect(chartGroupId);
 
     return () => {
@@ -583,7 +795,6 @@ export default function FlightDetailsRoute() {
     };
   }, [chartGroupId, syncEnabled, chartsReadyTick]);
 
-  // resize charts when splitter moves
   React.useEffect(() => {
     const t = window.setTimeout(() => {
       altInstRef.current?.resize?.();
@@ -594,6 +805,114 @@ export default function FlightDetailsRoute() {
     return () => window.clearTimeout(t);
   }, [splitPct]);
 
+  const StatsPanel = React.useMemo(() => {
+    if (!showStats) return null;
+    if (!segmentStats || !segmentStats.hasSegment) return null;
+
+    const s = segmentStats;
+
+    const dur = fmtTime(s.durSec);
+    const altStart = s.altStart != null ? Math.round(s.altStart) : null;
+    const altEnd = s.altEnd != null ? Math.round(s.altEnd) : null;
+    const dAlt = s.dAlt != null ? s.dAlt : null;
+
+    const altMin = s.altMin != null ? Math.round(s.altMin) : null;
+    const altMax = s.altMax != null ? Math.round(s.altMax) : null;
+
+    const vAvg = s.vAvg != null ? s.vAvg : null;
+    const vMax = s.vMax != null ? s.vMax : null;
+    const vMin = s.vMin != null ? s.vMin : null;
+
+    const spAvg = s.speedAvgKmh != null ? s.speedAvgKmh : null;
+    const spMax = s.speedMaxKmh != null ? s.speedMaxKmh : null;
+
+    const pctClimb = s.pctClimb != null ? s.pctClimb : null;
+    const pctSink = s.pctSink != null ? s.pctSink : null;
+    const pctGlide = s.pctGlide != null ? s.pctGlide : null;
+
+    const bestClimbT = s.longestClimbDurSec != null ? s.longestClimbDurSec : null;
+    const bestClimbDAlt = s.longestClimbDAlt != null ? s.longestClimbDAlt : null;
+
+    return (
+      <Paper withBorder p="sm" radius="md">
+        <Group justify="space-between" mb="xs">
+          <Text fw={600} size="sm">
+            Segment Stats
+          </Text>
+          <Text size="xs" c="dimmed">
+            {fmtTime(Math.min(startSec, endSec))} → {fmtTime(Math.max(startSec, endSec))} / {fmtTime(totalSec)}
+          </Text>
+        </Group>
+
+        <SimpleGrid cols={4} spacing="xs" verticalSpacing="xs">
+          <Box>
+            <Text size="xs" c="dimmed">Dauer</Text>
+            <Text fw={600}>{dur}</Text>
+          </Box>
+
+          <Box>
+            <Text size="xs" c="dimmed">Δ Höhe</Text>
+            <Text fw={600}>{dAlt == null ? "—" : `${fmtSigned(dAlt, 0)} m`}</Text>
+          </Box>
+
+          <Box>
+            <Text size="xs" c="dimmed">Alt (Start → Ende)</Text>
+            <Text fw={600}>
+              {altStart == null || altEnd == null ? "—" : `${altStart} → ${altEnd} m`}
+            </Text>
+          </Box>
+
+          <Box>
+            <Text size="xs" c="dimmed">Alt (Min / Max)</Text>
+            <Text fw={600}>
+              {altMin == null || altMax == null ? "—" : `${altMin} / ${altMax} m`}
+            </Text>
+          </Box>
+
+          <Box>
+            <Text size="xs" c="dimmed">Ø Vario</Text>
+            <Text fw={600}>{vAvg == null ? "—" : `${vAvg.toFixed(2)} m/s`}</Text>
+          </Box>
+
+          <Box>
+            <Text size="xs" c="dimmed">Vario (Min / Max)</Text>
+            <Text fw={600}>
+              {vMin == null || vMax == null ? "—" : `${vMin.toFixed(2)} / ${vMax.toFixed(2)} m/s`}
+            </Text>
+          </Box>
+
+          <Box>
+            <Text size="xs" c="dimmed">Ø Speed</Text>
+            <Text fw={600}>{spAvg == null ? "—" : `${spAvg.toFixed(1)} km/h`}</Text>
+          </Box>
+
+          <Box>
+            <Text size="xs" c="dimmed">Speed (Max)</Text>
+            <Text fw={600}>{spMax == null ? "—" : `${spMax.toFixed(1)} km/h`}</Text>
+          </Box>
+
+          <Box>
+            <Text size="xs" c="dimmed">Climb / Sink / Glide</Text>
+            <Text fw={600}>
+              {pctClimb == null || pctSink == null || pctGlide == null
+                ? "—"
+                : `${pctClimb.toFixed(0)}% / ${pctSink.toFixed(0)}% / ${pctGlide.toFixed(0)}%`}
+            </Text>
+          </Box>
+
+          <Box>
+            <Text size="xs" c="dimmed">Längste Climb-Phase</Text>
+            <Text fw={600}>
+              {bestClimbT == null || bestClimbDAlt == null
+                ? "—"
+                : `${fmtTime(bestClimbT)} (${fmtSigned(bestClimbDAlt, 0)} m)`}
+            </Text>
+          </Box>
+        </SimpleGrid>
+      </Paper>
+    );
+  }, [showStats, segmentStats, startSec, endSec, totalSec]);
+
   return (
     <Box p="md">
       <Stack gap="sm">
@@ -603,15 +922,15 @@ export default function FlightDetailsRoute() {
           </Button>
 
           <Group gap="md">
-            <Checkbox label="Topo" checked={baseMap === "topo"} onChange={(e) => setBaseMap(e.currentTarget.checked ? "topo" : "osm")} />
-            <Checkbox label="Charts sync" checked={syncEnabled} onChange={(e) => setSyncEnabled(e.currentTarget.checked)} />
             <Checkbox
-              label="Follow marker"
-              checked={followEnabled}
-              onChange={(e) => setFollowEnabled(e.currentTarget.checked)}
+              label="Topo"
+              checked={baseMap === "topo"}
+              onChange={(e) => setBaseMap(e.currentTarget.checked ? "topo" : "osm")}
             />
+            <Checkbox label="Charts sync" checked={syncEnabled} onChange={(e) => setSyncEnabled(e.currentTarget.checked)} />
+            <Checkbox label="Follow marker" checked={followEnabled} onChange={(e) => setFollowEnabled(e.currentTarget.checked)} />
+            <Checkbox label="Show stats" checked={showStats} onChange={(e) => setShowStats(e.currentTarget.checked)} />
           </Group>
-
         </Group>
 
         {busy && <Text c="dimmed">Loading...</Text>}
@@ -644,6 +963,8 @@ export default function FlightDetailsRoute() {
             {/* LEFT: Charts */}
             <Box style={{ width: `${splitPct}%`, paddingRight: 12, minWidth: 320, overflow: "auto" }}>
               <Stack gap="xs">
+                {StatsPanel}
+
                 <Box>
                   <Text size="sm" fw={600} mb={4}>
                     Altitude
@@ -722,12 +1043,7 @@ export default function FlightDetailsRoute() {
                 Map
               </Text>
               <Box style={{ flex: 1, minHeight: 0 }}>
-                <FlightMap
-                  fixes={computed.fixes}
-                  baseMap={baseMap}
-                  watchKey={`${id}-${baseMap}`}
-                  followEnabled={followEnabled}
-                />
+                <FlightMap fixes={computed.fixes} baseMap={baseMap} watchKey={`${id}-${baseMap}`} followEnabled={followEnabled} />
               </Box>
             </Box>
           </Box>
