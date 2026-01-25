@@ -14,6 +14,7 @@ import type { SeriesPoint } from "../features/flights/igc";
 
 import { FlightMap, type FixPoint, type BaseMap } from "../features/flights/map/FlightMapBase";
 import { useFlightHoverStore } from "../features/flights/store/flightHover.store";
+import { useTimeWindowStore } from "../features/flights/store/timeWindow.store";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -69,6 +70,35 @@ const axisPointerLabelFormatter = (params: AxisPointerLabelParams) => {
   return "";
 };
 
+
+function buildWindowMarkLine(
+  startSec: number,
+  endSec: number,
+  totalSec: number
+) {
+  // kleiner Puffer gegen Rundungsflackern
+  const eps = 0.5;
+
+  const isFull =
+    startSec <= eps && endSec >= totalSec - eps;
+
+  if (isFull || totalSec <= 0) return undefined;
+
+  return {
+    symbol: "none",
+    label: { show: false },
+    lineStyle: {
+      color: "rgba(18, 230, 106, 0.9)", // ✅ blau (wie du wolltest)
+      width: 2,
+      type: "dashed",
+      dashOffset: 0,
+    },
+    data: [
+      { xAxis: startSec },
+      { xAxis: endSec },
+    ],
+  };
+}
 
 const ALT_AXIS_POINTER = {
   type: "cross",
@@ -353,6 +383,16 @@ export default function FlightDetailsRoute() {
     return `<strong>${Math.round(h)} m</strong>`;
   };
 
+  const win = useTimeWindowStore((s) => s.window);
+  const startSec = win?.startSec ?? 0;
+  const endSec = win?.endSec ?? 0;   // durationSec bei dir vorhanden
+  const totalSec = win?.totalSec ?? 0;
+
+  const windowMarkLine = React.useMemo(
+    () => buildWindowMarkLine(startSec, endSec, totalSec),
+    [startSec, endSec, totalSec]
+  );
+
   // inside component:
   const altOption = React.useMemo(() => {
     if (!chartData) return {};
@@ -381,15 +421,23 @@ export default function FlightDetailsRoute() {
       dataZoom: ALT_DATAZOOM,
       series: [
         {
+          id: "alt",
           name: "Altitude",
           type: "line",
           data: chartData.alt,
           showSymbol: false,
           lineStyle: { width: 2 },
         },
+        {
+          name: "__window",
+          type: "line",
+          data: [],            // keine Daten
+          silent: true,        // keine Hover-Effekte
+          markLine: windowMarkLine,
+        },
       ],
     };
-  }, [chartData, baseOption]);
+  }, [chartData, baseOption, windowMarkLine]);
 
   const varioOption = React.useMemo(() => {
     if (!chartData) return {};
@@ -433,6 +481,7 @@ export default function FlightDetailsRoute() {
       dataZoom: [{ type: "inside", xAxisIndex: 0 }],
       series: [
         {
+          id: "vario",
           name: "Vario",
           type: "line",
           data: chartData.vSpeed,
@@ -442,9 +491,17 @@ export default function FlightDetailsRoute() {
           smoothMonotone: "x",
           markLine: { symbol: ["none", "none"], lineStyle: { type: "dashed", opacity: 0.6 }, data: [{ yAxis: 0 }] },
         },
+
+        {
+          name: "__window",
+          type: "line",
+          data: [],            // keine Daten
+          silent: true,        // keine Hover-Effekte
+          markLine: windowMarkLine,
+        },
       ],
     };
-  }, [chartData, baseOption]);
+  }, [chartData, baseOption, windowMarkLine]);
 
   const speedOption = React.useMemo(() => {
     if (!chartData) return {};
@@ -486,9 +543,20 @@ export default function FlightDetailsRoute() {
       xAxis: { type: "value", min: 0, max: chartData.maxT, axisLabel: { formatter: (v: number) => fmtTime(v) } },
       yAxis: { type: "value", name: "km/h", scale: true },
       dataZoom: [{ type: "inside", xAxisIndex: 0 }],
-      series: [{ name: "Ground speed", type: "line", data: chartData.hSpeed, showSymbol: false, lineStyle: { width: 2 }, }],
+      series: [
+        {
+          id: "speed",
+          name: "Ground speed", type: "line", data: chartData.hSpeed, showSymbol: false, lineStyle: { width: 2 },
+        },
+        {
+          name: "__window",
+          type: "line",
+          data: [],            // keine Daten
+          silent: true,        // keine Hover-Effekte
+          markLine: windowMarkLine,
+        },],
     };
-  }, [chartData, baseOption]);
+  }, [chartData, baseOption, windowMarkLine]);
 
   // Connect charts when all are ready
   React.useEffect(() => {

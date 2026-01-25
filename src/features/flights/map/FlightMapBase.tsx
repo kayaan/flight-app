@@ -3,18 +3,13 @@
 // ✅ Fixes UI jank: no React re-render on hover; no Popup; lightweight circleMarker
 
 import * as React from "react";
-import {
-    MapContainer,
-    TileLayer,
-    Polyline,
-    useMap,
-    useMapEvents,
-} from "react-leaflet";
+import { MapContainer, TileLayer, Polyline, useMap, useMapEvents } from "react-leaflet";
 import L, { type LatLngTuple, type LatLngBoundsExpression } from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { Box, Group, Text, RangeSlider } from "@mantine/core";
 import { useFlightHoverStore } from "../store/flightHover.store";
 import { useThrottledValue } from "@mantine/hooks";
+import { useTimeWindowStore } from "../store/timeWindow.store";
 
 export type BaseMap = "osm" | "topo";
 
@@ -36,6 +31,11 @@ function formatTime(sec: number) {
     const r = s % 60;
     if (h > 0) return `${h}:${String(m).padStart(2, "0")}:${String(r).padStart(2, "0")}`;
     return `${m}:${String(r).padStart(2, "0")}`;
+}
+
+function pct(sec: number, total: number) {
+    if (total <= 0) return 0;
+    return Math.round((sec / total) * 100);
 }
 
 function weightsForZoom(z: number) {
@@ -150,7 +150,6 @@ function upperBoundTSec(fixes: FixPoint[], tSec: number) {
 
 function colorForVario(v: number) {
     const a = Math.abs(v);
-
     const level = a < 2 ? 1 : a < 3 ? 2 : 3;
 
     if (v >= 0) {
@@ -166,18 +165,13 @@ function colorForVario(v: number) {
 
 type ColorChunk = { color: string; positions: LatLngTuple[] };
 
-function buildChunksFromFixesWindow(
-    fixes: FixPoint[],
-    startIdx: number,
-    endIdx: number
-): ColorChunk[] {
+function buildChunksFromFixesWindow(fixes: FixPoint[], startIdx: number, endIdx: number): ColorChunk[] {
     const n = fixes.length;
     if (n < 2) return [];
     const s = clamp(startIdx, 0, n - 2);
     const e = clamp(endIdx, s + 1, n - 1);
 
     const chunks: ColorChunk[] = [];
-
     let lastColor = "";
     let cur: LatLngTuple[] | null = null;
 
@@ -236,16 +230,13 @@ function HoverMarker({
         return m;
     }, [fixes]);
 
-    // keep latest toggle without resubscribing
     const followRef = React.useRef<boolean>(followEnabled);
     React.useEffect(() => {
         followRef.current = followEnabled;
     }, [followEnabled]);
 
-    // pan throttling
     const lastPanAtRef = React.useRef(0);
 
-    // create markers once
     React.useEffect(() => {
         if (coreRef.current || haloRef.current) return;
 
@@ -282,7 +273,6 @@ function HoverMarker({
         };
     }, [map]);
 
-    // subscribe to hoverTSec (no React state!)
     React.useEffect(() => {
         const unsub = useFlightHoverStore.subscribe((state) => {
             const t = state.hoverTSec;
@@ -304,17 +294,14 @@ function HoverMarker({
             halo.setStyle({ opacity: 1, fillOpacity: 0.35 });
             core.setStyle({ opacity: 1, fillOpacity: 1 });
 
-            // ✅ toggle: only pan when followEnabled
             if (!followRef.current) return;
 
-            // ✅ pan only if not visible (with margin) + rate-limited
             const now = Date.now();
             if (now - lastPanAtRef.current < 120) return;
             lastPanAtRef.current = now;
 
             const ll = L.latLng(pos[0], pos[1]);
 
-            // safe viewport margin in pixels
             const marginPx = 40;
             const b = map.getBounds();
             const nw = map.latLngToContainerPoint(b.getNorthWest());
@@ -323,7 +310,6 @@ function HoverMarker({
             const safeNW = L.point(nw.x + marginPx, nw.y + marginPx);
             const safeSE = L.point(se.x - marginPx, se.y - marginPx);
 
-            // avoid degenerate bounds
             if (safeSE.x <= safeNW.x || safeSE.y <= safeNW.y) return;
 
             const safeBounds = L.latLngBounds(
@@ -342,29 +328,24 @@ function HoverMarker({
     return null;
 }
 
-
 export function FlightMap({
     baseMap = "osm",
     watchKey,
     fixes,
-    followEnabled = true
+    followEnabled = true,
 }: {
     baseMap?: BaseMap;
     watchKey?: unknown;
     fixes: FixPoint[];
-    followEnabled: boolean
+    followEnabled: boolean;
 }) {
     const hasTrack = fixes.length >= 2;
     const initialZoom = hasTrack ? 13 : 11;
 
+    const setWindow = useTimeWindowStore((s) => s.setWindowThrottled);
+
     const [zoom, setZoom] = React.useState<number>(initialZoom);
     React.useEffect(() => setZoom(initialZoom), [initialZoom]);
-
-    // internal range selection (decoupled from outside)
-
-
-    const [immediateValue, setImmediateValue] = React.useState<[number, number]>([0, 100]);
-    const rangePct = useThrottledValue<[number, number]>(immediateValue, 100);
 
     const fullPoints = React.useMemo(() => {
         const out = new Array<LatLngTuple>(fixes.length);
@@ -374,13 +355,29 @@ export function FlightMap({
 
     const totalSeconds = fixes.length ? fixes[fixes.length - 1].tSec : 0;
 
+    // ✅ Slider values are SECONDS (precise), UI label shows %
+    const [immediateValue, setImmediateValue] = React.useState<[number, number]>([0, 0]);
+    const rangeSec = useThrottledValue<[number, number]>(immediateValue, 150);
+
+    // ✅ reset when flight/duration changes
+    React.useEffect(() => {
+        setImmediateValue([0, totalSeconds]);
+    }, [totalSeconds]);
+
     const [startSec, endSec] = React.useMemo(() => {
-        const a = clamp(rangePct[0], 0, fixes.at(-1)!.tSec);
-        const b = clamp(rangePct[1], 0, fixes.at(-1)!.tSec);
+        const maxSec = totalSeconds;
+
+        const a = clamp(rangeSec[0] ?? 0, 0, maxSec);
+        const b = clamp(rangeSec[1] ?? 0, 0, maxSec);
+
         const start = Math.min(a, b);
         const end = Math.max(a, b);
         return [start, end];
-    }, [rangePct, fixes]);
+    }, [rangeSec, totalSeconds]);
+
+    React.useEffect(() => {
+        setWindow({ startSec, endSec, totalSec: totalSeconds })
+    }, [setWindow, startSec, endSec, totalSeconds])
 
     const { startIdx, endIdx } = React.useMemo(() => {
         if (fixes.length < 2) return { startIdx: 0, endIdx: 0 };
@@ -403,22 +400,27 @@ export function FlightMap({
 
     const tile = TILE[baseMap];
 
+    const startPct = pct(startSec, totalSeconds);
+    const endPct = pct(endSec, totalSeconds);
+
     return (
         <Box style={{ display: "flex", flexDirection: "column", height: "100%" }}>
             <Group justify="space-between" mb="xs">
                 <Text fw={600}>Zeitfenster</Text>
                 <Text c="dimmed">
-                    {formatTime(startSec)} → {formatTime(endSec)} / {formatTime(totalSeconds)}
+                    {startPct}% ({formatTime(startSec)}) → {endPct}% ({formatTime(endSec)}) / {formatTime(totalSeconds)}
                 </Text>
             </Group>
 
             <RangeSlider
+                value={immediateValue}
                 onChange={(v) => setImmediateValue([Math.min(v[0], v[1]), Math.max(v[0], v[1])])}
                 min={0}
-                max={fixes.at(-1)?.tSec}
+                max={totalSeconds}
                 step={1}
                 minRange={1}
                 mb="sm"
+                label={(v) => `${pct(v, totalSeconds)}%`}
             />
 
             <Box style={{ flex: 1, minHeight: 0 }}>
