@@ -837,8 +837,8 @@ export default function FlightDetailsRoute() {
           data: chartData.vSpeed,
           showSymbol: false,
           lineStyle: { width: 2 },
-          smooth: 0.35,
-          smoothMonotone: "x",
+          // smooth: 0.35,
+          // smoothMonotone: "x",
           markLine: { symbol: ["none", "none"], lineStyle: { type: "dashed", opacity: 0.6 }, data: [{ yAxis: 0 }] },
         },
         {
@@ -898,6 +898,8 @@ export default function FlightDetailsRoute() {
           name: "Ground speed",
           type: "line",
           data: chartData.hSpeed,
+          smooth: 1,
+          smoothMonotone: "x",
           showSymbol: false,
           lineStyle: { width: 2 },
         },
@@ -1052,6 +1054,40 @@ export default function FlightDetailsRoute() {
     );
   }, [showStats, segmentStats, startSec, endSec, totalSec, varioWindowSec]);
 
+
+  const zoomChartsToWindow = React.useCallback(() => {
+    const a = altInstRef.current;
+    const v = varioInstRef.current;
+    const s = speedInstRef.current;
+
+    if (!a || !v || !s) return;
+
+    const maxT = chartData?.maxT ?? totalSec ?? 0;
+    if (!Number.isFinite(maxT) || maxT <= 0) return;
+
+    let zs = Math.min(startSec, endSec);
+    let ze = Math.max(startSec, endSec);
+
+    // Wenn noch kein Fenster gewählt ist: full range
+    if (!Number.isFinite(zs) || !Number.isFinite(ze) || Math.abs(ze - zs) < 0.0001) {
+      zs = 0;
+      ze = maxT;
+    }
+
+    // clamp
+    zs = clamp(zs, 0, maxT);
+    ze = clamp(ze, 0, maxT);
+    if (ze <= zs) return;
+
+    // Alt chart hat inside + slider -> beide setzen
+    a.dispatchAction?.({ type: "dataZoom", dataZoomIndex: 0, startValue: zs, endValue: ze });
+    a.dispatchAction?.({ type: "dataZoom", dataZoomIndex: 1, startValue: zs, endValue: ze });
+
+    // Vario + Speed haben nur inside zoom (Index 0)
+    v.dispatchAction?.({ type: "dataZoom", dataZoomIndex: 0, startValue: zs, endValue: ze });
+    s.dispatchAction?.({ type: "dataZoom", dataZoomIndex: 0, startValue: zs, endValue: ze });
+  }, [chartData?.maxT, totalSec, startSec, endSec]);
+
   return (
     <Box p="md">
       <Stack gap="sm">
@@ -1066,6 +1102,16 @@ export default function FlightDetailsRoute() {
               checked={baseMap === "topo"}
               onChange={(e) => setBaseMap(e.currentTarget.checked ? "topo" : "osm")}
             />
+
+            <Button
+              size="xs"
+              variant="light"
+              onClick={zoomChartsToWindow}
+              disabled={!chartData || !altInstRef.current || !varioInstRef.current || !speedInstRef.current}
+            >
+              Zoom to window
+            </Button>
+
             <Checkbox label="Charts sync" checked={syncEnabled} onChange={(e) => setSyncEnabled(e.currentTarget.checked)} />
             <Checkbox label="Follow marker" checked={followEnabled} onChange={(e) => setFollowEnabled(e.currentTarget.checked)} />
             <Checkbox label="Show stats" checked={showStats} onChange={(e) => setShowStats(e.currentTarget.checked)} />
