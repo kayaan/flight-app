@@ -1,7 +1,18 @@
 // flights.$id.tsx
 import * as React from "react";
 import { createFileRoute } from "@tanstack/react-router";
-import { Box, Stack, Text, Alert, Button, Group, Checkbox, SimpleGrid, Paper } from "@mantine/core";
+import {
+  Box,
+  Stack,
+  Text,
+  Alert,
+  Button,
+  Group,
+  Checkbox,
+  SimpleGrid,
+  Paper,
+  NumberInput,
+} from "@mantine/core";
 import { IconAlertCircle } from "@tabler/icons-react";
 import EChartsReact from "echarts-for-react";
 import * as echarts from "echarts";
@@ -109,27 +120,61 @@ function fmtTime(sec: number) {
   return `${mm}:${String(ss).padStart(2, "0")}`;
 }
 
-function calculateVSpeedFromSeries(points: SeriesPoint[]): [number, number][] {
-  const result: [number, number][] = [];
-  const windowSize = 10;
+/**
+ * Vario "wie echtes Vario": Steigrate über ein zeitbasiertes Fenster (Sekunden),
+ * als trailing-window: v(t) = (alt(t) - alt(t - win)) / (t - (t - win)).
+ *
+ * Liefert [tSec, vMs] für jeden SeriesPoint.
+ */
+function calculateVarioFromSeries(points: SeriesPoint[], windowSec: number): [number, number][] {
+  const n = points.length;
+  if (!n) return [];
+  const w = Math.max(0.25, windowSec);
 
-  for (let i = 0; i < points.length; i += windowSize) {
-    const chunk = points.slice(i, i + windowSize);
-
-    let vSpeed = 0;
-    if (chunk.length > 1) {
-      const a = chunk[0];
-      const b = chunk[chunk.length - 1];
-      const dt = b.tSec - a.tSec;
-      if (dt !== 0) vSpeed = (b.altitudeM - a.altitudeM) / dt;
+  // binary search: largest index j with points[j].tSec <= target (j <= hi)
+  function idxAtOrBefore(target: number, hi: number) {
+    let lo = 0;
+    let h = hi;
+    while (lo < h) {
+      const mid = (lo + h + 1) >> 1;
+      if (points[mid].tSec <= target) lo = mid;
+      else h = mid - 1;
     }
-
-    const rounded = Math.round(vSpeed * 100) / 100;
-    for (const p of chunk) result.push([p.tSec, rounded]);
+    return lo;
   }
 
-  return result;
+  const res: [number, number][] = new Array(n);
+
+  for (let i = 0; i < n; i++) {
+    const t = points[i].tSec;
+
+    // ✅ Warm-up: bevor das volle Fenster verfügbar ist, kein Peak erzeugen
+    if (t < w) {
+      res[i] = [t, 0];
+      continue;
+    }
+
+    const target = t - w;
+    const j = idxAtOrBefore(target, i); // j <= i
+    const a = points[j];
+    const b = points[i];
+
+    const dt = b.tSec - a.tSec;
+    let v = 0;
+
+    // dt sollte hier i.d.R. ~w sein; wenn nicht, trotzdem sicher bleiben
+    if (dt > 0.0001) v = (b.altitudeM - a.altitudeM) / dt;
+
+    // optional: glitch clamp (sehr großzügig)
+    v = clamp(v, -25, 25);
+
+    // NICHT runden für "Max", nur Anzeige/Tooltip runden
+    res[i] = [t, v];
+  }
+
+  return res;
 }
+
 
 function extractTSec(params: any): number | null {
   const v = params?.value ?? params?.data?.value ?? params?.data;
@@ -190,12 +235,86 @@ type SegmentStats = {
   longestClimbDAlt: number | null;
 };
 
-function computeSegmentStats(series: SeriesPoint[], startSec: number, endSec: number): SegmentStats {
-  const s = Math.max(0, Math.min(startSec, endSec));
-  const e = Math.max(0, Math.max(startSec, endSec));
+function vAt(varioSeries: [number, number][], t: number): number {
+  const n = varioSeries.length;
+  if (!n) return 0;
+
+  // clamp to bounds
+  if (t <= varioSeries[0][0]) return varioSeries[0][1];
+  if (t >= varioSeries[n - 1][0]) return varioSeries[n - 1][1];
+
+  // binary search: find right index r where t <= t_r
+  let lo = 0;
+  let hi = n - 1;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (varioSeries[mid][0] < t) lo = mid + 1;
+    else hi = mid;
+  }
+  const r = lo;
+  const l = r - 1;
+
+  const t0 = varioSeries[l][0];
+  const v0 = varioSeries[l][1];
+  const t1 = varioSeries[r][0];
+  const v1 = varioSeries[r][1];
+
+  const dt = t1 - t0;
+  if (dt <= 0) return v1;
+
+  const a = (t - t0) / dt;
+  return v0 + (v1 - v0) * a;
+}
+
+/**
+ * Wichtig: vAvg/vMax/vMin werden aus DERSELBEN Vario-Reihe berechnet,
+ * die auch im Chart gezeichnet wird (varioSeries).
+ *
+ * varioSeries muss 1:1 zu series passen (gleiche Indizes), als [tSec, vMs].
+ */
+function computeSegmentStats(
+  series: SeriesPoint[],
+  varioSeries: [number, number][],
+  startSec: number,
+  endSec: number
+): SegmentStats {
+  if (!series.length || !varioSeries.length) {
+    return {
+      hasSegment: false,
+      durSec: 0,
+      altStart: null,
+      altEnd: null,
+      dAlt: null,
+      altMin: null,
+      altMax: null,
+      vAvg: null,
+      vMax: null,
+      vMin: null,
+      speedAvgKmh: null,
+      speedMaxKmh: null,
+      pctClimb: null,
+      pctSink: null,
+      pctGlide: null,
+      longestClimbDurSec: null,
+      longestClimbDAlt: null,
+    };
+  }
+
+  const maxT = series[series.length - 1].tSec;
+
+  // ✅ wenn noch kein Fenster gesetzt (start==end), nimm Full Flight
+  let s = Math.max(0, Math.min(startSec, endSec));
+  let e = Math.max(0, Math.max(startSec, endSec));
+  if (Math.abs(e - s) < 0.0001) {
+    s = 0;
+    e = maxT;
+  }
+
+  s = clamp(s, 0, maxT);
+  e = clamp(e, 0, maxT);
   const durSec = Math.max(0, e - s);
 
-  if (!series.length || durSec <= 0) {
+  if (durSec <= 0) {
     return {
       hasSegment: false,
       durSec,
@@ -220,126 +339,122 @@ function computeSegmentStats(series: SeriesPoint[], startSec: number, endSec: nu
   const i0 = clamp(lowerBoundSeries(series, s), 0, series.length - 1);
   const i1 = clamp(upperBoundSeries(series, e), 0, series.length - 1);
 
-  if (i1 <= i0) {
-    const p = series[i0];
-    return {
-      hasSegment: true,
-      durSec,
-      altStart: p.altitudeM,
-      altEnd: p.altitudeM,
-      dAlt: 0,
-      altMin: p.altitudeM,
-      altMax: p.altitudeM,
-      vAvg: 0,
-      vMax: 0,
-      vMin: 0,
-      speedAvgKmh: p.gSpeedKmh ?? null,
-      speedMaxKmh: p.gSpeedKmh ?? null,
-      pctClimb: 0,
-      pctSink: 0,
-      pctGlide: 100,
-      longestClimbDurSec: 0,
-      longestClimbDAlt: 0,
-    };
-  }
-
   const altStart = series[i0].altitudeM;
   const altEnd = series[i1].altitudeM;
 
   let altMin = Number.POSITIVE_INFINITY;
   let altMax = Number.NEGATIVE_INFINITY;
 
+  // --- Vario stats: EXAKT aus varioSeries im Zeitfenster ---
   let vSum = 0;
-  let vDtSum = 0;
+  let vCount = 0;
   let vMax = Number.NEGATIVE_INFINITY;
   let vMin = Number.POSITIVE_INFINITY;
 
-  let speedSum = 0;
-  let speedDtSum = 0;
-  let speedMax = Number.NEGATIVE_INFINITY;
+  for (let i = i0; i <= i1; i++) {
+    const t = varioSeries[i][0];
+    if (t < s || t > e) continue;
 
-  // Phase-Analyse
-  const CLIMB_TH = 0.5; // m/s
-  const SINK_TH = -0.7; // m/s
+    const v = varioSeries[i][1];
+    vSum += v;
+    vCount += 1;
+    vMax = Math.max(vMax, v);
+    vMin = Math.min(vMin, v);
+  }
 
+  const vAvg = vCount > 0 ? vSum / vCount : null;
+  const vMaxOut = Number.isFinite(vMax) ? vMax : null;
+  const vMinOut = Number.isFinite(vMin) ? vMin : null;
+
+  // Phase-Analyse (ebenfalls aus derselben Vario-Kurve, simpel)
+  const CLIMB_TH = 0.5;
+  const SINK_TH = -0.7;
   let climbTime = 0;
   let sinkTime = 0;
   let glideTime = 0;
-
-  // Longest climb block
-  let curClimbT = 0;
-  let curClimbStartAlt: number | null = null;
-  let bestClimbT = 0;
-  let bestClimbDAlt = 0;
 
   for (let i = i0; i < i1; i++) {
     const a = series[i];
     const b = series[i + 1];
 
-    const tA = a.tSec;
-    const tB = b.tSec;
-
-    const segStart = Math.max(tA, s);
-    const segEnd = Math.min(tB, e);
+    const segStart = Math.max(a.tSec, s);
+    const segEnd = Math.min(b.tSec, e);
     const dt = segEnd - segStart;
     if (dt <= 0) continue;
 
-    // min/max altitude (über Punkte im Segment)
-    altMin = Math.min(altMin, a.altitudeM, b.altitudeM);
-    altMax = Math.max(altMax, a.altitudeM, b.altitudeM);
+    const v = varioSeries[i][1]; // “zugehörig” zum Zeitpunkt a.tSec, aber für Phase reicht’s stabil
+    if (v > CLIMB_TH) climbTime += dt;
+    else if (v < SINK_TH) sinkTime += dt;
+    else glideTime += dt;
+  }
 
-    // vario über (a->b)
-    const denom = tB - tA;
-    const v = denom > 0 ? (b.altitudeM - a.altitudeM) / denom : 0;
+  const totalPhase = climbTime + sinkTime + glideTime;
+  const pctClimb = totalPhase > 0 ? (climbTime / totalPhase) * 100 : null;
+  const pctSink = totalPhase > 0 ? (sinkTime / totalPhase) * 100 : null;
+  const pctGlide = totalPhase > 0 ? (glideTime / totalPhase) * 100 : null;
 
-    vSum += v * dt;
-    vDtSum += dt;
-    vMax = Math.max(vMax, v);
-    vMin = Math.min(vMin, v);
+  // Alt min/max über Punkte
+  for (let i = i0; i <= i1; i++) {
+    altMin = Math.min(altMin, series[i].altitudeM);
+    altMax = Math.max(altMax, series[i].altitudeM);
+  }
 
-    // speed über a (gewichtete Mittelung)
+  // Speed stats (gewichtet)
+  let speedSum = 0;
+  let speedDtSum = 0;
+  let speedMax = Number.NEGATIVE_INFINITY;
+
+  for (let i = i0; i < i1; i++) {
+    const a = series[i];
+    const b = series[i + 1];
+
+    const segStart = Math.max(a.tSec, s);
+    const segEnd = Math.min(b.tSec, e);
+    const dt = segEnd - segStart;
+    if (dt <= 0) continue;
+
     const sp = typeof a.gSpeedKmh === "number" && Number.isFinite(a.gSpeedKmh) ? a.gSpeedKmh : NaN;
     if (Number.isFinite(sp)) {
       speedSum += sp * dt;
       speedDtSum += dt;
       speedMax = Math.max(speedMax, sp);
     }
-
-    // phase time
-    if (v > CLIMB_TH) climbTime += dt;
-    else if (v < SINK_TH) sinkTime += dt;
-    else glideTime += dt;
-
-    // longest climb block (konsekutiv)
-    if (v > CLIMB_TH) {
-      if (curClimbStartAlt == null) curClimbStartAlt = a.altitudeM;
-      curClimbT += dt;
-    } else {
-      if (curClimbT > bestClimbT) {
-        bestClimbT = curClimbT;
-        const dAlt = curClimbStartAlt == null ? 0 : (a.altitudeM - curClimbStartAlt);
-        bestClimbDAlt = dAlt;
-      }
-      curClimbT = 0;
-      curClimbStartAlt = null;
-    }
   }
 
-  // finalize last block
-  if (curClimbT > bestClimbT) {
-    bestClimbT = curClimbT;
-    const endAlt = series[i1].altitudeM;
-    const dAlt = curClimbStartAlt == null ? 0 : (endAlt - curClimbStartAlt);
-    bestClimbDAlt = dAlt;
-  }
-
-  const vAvg = vDtSum > 0 ? vSum / vDtSum : null;
   const speedAvg = speedDtSum > 0 ? speedSum / speedDtSum : null;
 
-  const totalPhase = climbTime + sinkTime + glideTime;
-  const pctClimb = totalPhase > 0 ? (climbTime / totalPhase) * 100 : null;
-  const pctSink = totalPhase > 0 ? (sinkTime / totalPhase) * 100 : null;
-  const pctGlide = totalPhase > 0 ? (glideTime / totalPhase) * 100 : null;
+  // Longest climb block (einfach, stabil)
+  let bestClimbT = 0;
+  let bestClimbDAlt = 0;
+  let curT = 0;
+  let curStartAlt: number | null = null;
+
+  for (let i = i0; i < i1; i++) {
+    const a = series[i];
+    const b = series[i + 1];
+
+    const segStart = Math.max(a.tSec, s);
+    const segEnd = Math.min(b.tSec, e);
+    const dt = segEnd - segStart;
+    if (dt <= 0) continue;
+
+    const v = varioSeries[i][1];
+    if (v > CLIMB_TH) {
+      if (curStartAlt == null) curStartAlt = a.altitudeM;
+      curT += dt;
+    } else {
+      if (curT > bestClimbT) {
+        bestClimbT = curT;
+        bestClimbDAlt = curStartAlt == null ? 0 : (a.altitudeM - curStartAlt);
+      }
+      curT = 0;
+      curStartAlt = null;
+    }
+  }
+  if (curT > bestClimbT) {
+    bestClimbT = curT;
+    bestClimbDAlt = curStartAlt == null ? 0 : (altEnd - curStartAlt);
+  }
 
   return {
     hasSegment: true,
@@ -351,11 +466,11 @@ function computeSegmentStats(series: SeriesPoint[], startSec: number, endSec: nu
     altMin: Number.isFinite(altMin) ? altMin : null,
     altMax: Number.isFinite(altMax) ? altMax : null,
 
-    vAvg: vAvg != null ? vAvg : null,
-    vMax: Number.isFinite(vMax) ? vMax : null,
-    vMin: Number.isFinite(vMin) ? vMin : null,
+    vAvg,
+    vMax: vMaxOut,
+    vMin: vMinOut,
 
-    speedAvgKmh: speedAvg != null ? speedAvg : null,
+    speedAvgKmh: speedAvg,
     speedMaxKmh: Number.isFinite(speedMax) ? speedMax : null,
 
     pctClimb,
@@ -366,6 +481,7 @@ function computeSegmentStats(series: SeriesPoint[], startSec: number, endSec: nu
     longestClimbDAlt: bestClimbDAlt,
   };
 }
+
 
 function fmtSigned(n: number, digits = 0) {
   const s = n >= 0 ? "+" : "";
@@ -378,6 +494,7 @@ export default function FlightDetailsRoute() {
 
   const FOLLOW_KEY = "flyapp.flightDetails.followMarker";
   const STATS_KEY = "flyapp.flightDetails.showStats";
+  const VARIO_WIN_KEY = "flyapp.flightDetails.varioWindowSec";
 
   const [followEnabled, setFollowEnabled] = React.useState<boolean>(() => {
     try {
@@ -414,6 +531,26 @@ export default function FlightDetailsRoute() {
       // ignore
     }
   }, [showStats]);
+
+  // ✅ Vario-Fenster (Default 4s, änderbar + persisted)
+  const [varioWindowSec, setVarioWindowSec] = React.useState<number>(() => {
+    try {
+      const raw = localStorage.getItem(VARIO_WIN_KEY);
+      const n = raw == null ? NaN : Number(raw);
+      if (Number.isFinite(n) && n > 0) return clamp(n, 1, 30);
+      return 4;
+    } catch {
+      return 4;
+    }
+  });
+
+  React.useEffect(() => {
+    try {
+      localStorage.setItem(VARIO_WIN_KEY, String(varioWindowSec));
+    } catch {
+      // ignore
+    }
+  }, [varioWindowSec]);
 
   const setHoverTSecThrottled = useFlightHoverStore((s) => s.setHoverTSecThrottled);
   const clearNow = useFlightHoverStore((s) => s.clearNow);
@@ -552,7 +689,9 @@ export default function FlightDetailsRoute() {
 
     const alt = computed.series.map((p) => [p.tSec, p.altitudeM] as [number, number]);
     const hSpeed = computed.series.map((p) => [p.tSec, p.gSpeedKmh] as [number, number]);
-    const vSpeed = calculateVSpeedFromSeries(computed.series);
+
+    // ✅ NEU: vario = zeitbasiert (Default 4s), und wird auch für Stats verwendet
+    const vSpeed = calculateVarioFromSeries(computed.series, varioWindowSec);
 
     const maxT = computed.series.length ? computed.series[computed.series.length - 1].tSec : 0;
 
@@ -566,7 +705,7 @@ export default function FlightDetailsRoute() {
     const vMin = -vMax;
 
     return { alt, hSpeed, vSpeed, maxT, altMin, altMax, vMin, vMax };
-  }, [computed]);
+  }, [computed, varioWindowSec]);
 
   const baseOption = React.useMemo(() => {
     return {
@@ -601,9 +740,9 @@ export default function FlightDetailsRoute() {
   );
 
   const segmentStats = React.useMemo(() => {
-    if (!computed?.series) return null;
-    return computeSegmentStats(computed.series, startSec, endSec);
-  }, [computed?.series, startSec, endSec]);
+    if (!computed?.series || !chartData?.vSpeed) return null;
+    return computeSegmentStats(computed.series, chartData.vSpeed, startSec, endSec);
+  }, [computed?.series, chartData?.vSpeed, startSec, endSec]);
 
   const altOption = React.useMemo(() => {
     if (!chartData) return {};
@@ -683,7 +822,7 @@ export default function FlightDetailsRoute() {
         formatter: (params: any[]) => {
           const y = params?.[0]?.value?.[1];
           if (y == null) return "";
-          return `<strong>${y.toFixed(1)} m/s</strong>`;
+          return `<strong>${Number(y).toFixed(1)} m/s</strong>`;
         },
       },
       grid: { left: 56, right: 16, top: 24, bottom: 24 },
@@ -693,7 +832,7 @@ export default function FlightDetailsRoute() {
       series: [
         {
           id: "vario",
-          name: "Vario",
+          name: `Vario (${varioWindowSec}s)`,
           type: "line",
           data: chartData.vSpeed,
           showSymbol: false,
@@ -712,7 +851,7 @@ export default function FlightDetailsRoute() {
         },
       ],
     };
-  }, [chartData, baseOption, windowMarkLine]);
+  }, [chartData, baseOption, windowMarkLine, varioWindowSec]);
 
   const speedOption = React.useMemo(() => {
     if (!chartData) return {};
@@ -746,7 +885,7 @@ export default function FlightDetailsRoute() {
         formatter: (params: any[]) => {
           const y = params?.[0]?.value?.[1];
           if (y == null) return "";
-          return `<strong>${y.toFixed(1)} km/h</strong>`;
+          return `<strong>${Number(y).toFixed(1)} km/h</strong>`;
         },
       },
       grid: { left: 56, right: 16, top: 24, bottom: 24 },
@@ -870,7 +1009,7 @@ export default function FlightDetailsRoute() {
           </Box>
 
           <Box>
-            <Text size="xs" c="dimmed">Ø Vario</Text>
+            <Text size="xs" c="dimmed">Ø Vario ({varioWindowSec}s)</Text>
             <Text fw={600}>{vAvg == null ? "—" : `${vAvg.toFixed(2)} m/s`}</Text>
           </Box>
 
@@ -911,7 +1050,7 @@ export default function FlightDetailsRoute() {
         </SimpleGrid>
       </Paper>
     );
-  }, [showStats, segmentStats, startSec, endSec, totalSec]);
+  }, [showStats, segmentStats, startSec, endSec, totalSec, varioWindowSec]);
 
   return (
     <Box p="md">
@@ -921,7 +1060,7 @@ export default function FlightDetailsRoute() {
             Back
           </Button>
 
-          <Group gap="md">
+          <Group gap="md" align="center">
             <Checkbox
               label="Topo"
               checked={baseMap === "topo"}
@@ -930,6 +1069,25 @@ export default function FlightDetailsRoute() {
             <Checkbox label="Charts sync" checked={syncEnabled} onChange={(e) => setSyncEnabled(e.currentTarget.checked)} />
             <Checkbox label="Follow marker" checked={followEnabled} onChange={(e) => setFollowEnabled(e.currentTarget.checked)} />
             <Checkbox label="Show stats" checked={showStats} onChange={(e) => setShowStats(e.currentTarget.checked)} />
+
+            {/* ✅ 4s default, änderbar */}
+            <NumberInput
+              label="Vario win (s)"
+              value={varioWindowSec}
+              onChange={(v) => {
+                const n = typeof v === "number" ? v : Number(v);
+                if (!Number.isFinite(n)) return;
+                setVarioWindowSec(clamp(Math.round(n), 1, 30));
+              }}
+              min={1}
+              max={30}
+              step={1}
+              w={140}
+              size="xs"
+              styles={{
+                label: { marginBottom: 2 },
+              }}
+            />
           </Group>
         </Group>
 
