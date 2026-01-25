@@ -14,6 +14,7 @@ import L, { type LatLngTuple, type LatLngBoundsExpression } from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { Box, Group, Text, RangeSlider } from "@mantine/core";
 import { useFlightHoverStore } from "../store/flightHover.store";
+import { useThrottledValue } from "@mantine/hooks";
 
 export type BaseMap = "osm" | "topo";
 
@@ -360,7 +361,10 @@ export function FlightMap({
     React.useEffect(() => setZoom(initialZoom), [initialZoom]);
 
     // internal range selection (decoupled from outside)
-    const [rangePct, setRangePct] = React.useState<[number, number]>([0, 100]);
+
+
+    const [immediateValue, setImmediateValue] = React.useState<[number, number]>([0, 100]);
+    const rangePct = useThrottledValue<[number, number]>(immediateValue, 100);
 
     const fullPoints = React.useMemo(() => {
         const out = new Array<LatLngTuple>(fixes.length);
@@ -371,12 +375,12 @@ export function FlightMap({
     const totalSeconds = fixes.length ? fixes[fixes.length - 1].tSec : 0;
 
     const [startSec, endSec] = React.useMemo(() => {
-        const a = clamp(rangePct[0], 0, 100);
-        const b = clamp(rangePct[1], 0, 100);
-        const start = (Math.min(a, b) / 100) * totalSeconds;
-        const end = (Math.max(a, b) / 100) * totalSeconds;
+        const a = clamp(rangePct[0], 0, fixes.at(-1)!.tSec);
+        const b = clamp(rangePct[1], 0, fixes.at(-1)!.tSec);
+        const start = Math.min(a, b);
+        const end = Math.max(a, b);
         return [start, end];
-    }, [rangePct, totalSeconds]);
+    }, [rangePct, fixes]);
 
     const { startIdx, endIdx } = React.useMemo(() => {
         if (fixes.length < 2) return { startIdx: 0, endIdx: 0 };
@@ -409,10 +413,9 @@ export function FlightMap({
             </Group>
 
             <RangeSlider
-                value={rangePct}
-                onChange={(v) => setRangePct([Math.min(v[0], v[1]), Math.max(v[0], v[1])])}
+                onChange={(v) => setImmediateValue([Math.min(v[0], v[1]), Math.max(v[0], v[1])])}
                 min={0}
-                max={100}
+                max={fixes.at(-1)?.tSec}
                 step={1}
                 minRange={1}
                 mb="sm"
