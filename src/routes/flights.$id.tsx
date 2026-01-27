@@ -176,6 +176,90 @@ function calculateVarioFromSeries(points: SeriesPoint[], windowSec: number): [nu
 }
 
 
+function calculateSmoothedSpeedFromSeries(points: SeriesPoint[], windowSec: number): [number, number][] {
+  const n = points.length;
+  if (!n) return [];
+  const w = Math.max(0.25, windowSec);
+
+  // wir behandeln speed als "step function": speed_i gilt für [t_i, t_{i+1})
+  // dann ist Mittelwert = (Integral speed dt) / dt
+
+  const t: number[] = new Array(n);
+  const sp: number[] = new Array(n);
+
+  for (let i = 0; i < n; i++) {
+    t[i] = points[i].tSec;
+    const v = points[i].gSpeedKmh;
+    sp[i] = typeof v === "number" && Number.isFinite(v) ? v : NaN;
+  }
+
+  // prefix integral: A[k] = ∫ speed dt von t0 bis t_k (k index)
+  // wobei speed in Intervall i->i+1 = sp[i]
+  const A: number[] = new Array(n).fill(0);
+  let acc = 0;
+  for (let i = 0; i < n - 1; i++) {
+    const dt = t[i + 1] - t[i];
+    const v = sp[i];
+    const add = dt > 0 && Number.isFinite(v) ? v * dt : 0;
+    acc += add;
+    A[i + 1] = acc;
+  }
+
+  function clamp01(x: number) {
+    return x < 0 ? 0 : x > 1 ? 1 : x;
+  }
+
+  // Integral bis Zeit x (linear innerhalb des Segments)
+  function areaAt(x: number): number {
+    if (x <= t[0]) return 0;
+    if (x >= t[n - 1]) return A[n - 1];
+
+    // find i with t[i] <= x < t[i+1]
+    let lo = 0;
+    let hi = n - 2;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (t[mid + 1] <= x) lo = mid + 1;
+      else hi = mid;
+    }
+    const i = lo;
+
+    const base = A[i];
+    const dt = t[i + 1] - t[i];
+    if (dt <= 0) return base;
+
+    const v = sp[i];
+    if (!Number.isFinite(v)) return base;
+
+    const frac = clamp01((x - t[i]) / dt);
+    return base + v * (dt * frac);
+  }
+
+  const out: [number, number][] = new Array(n);
+
+  for (let i = 0; i < n; i++) {
+    const ti = t[i];
+
+    // warm-up: bevor volles Fenster da ist -> Rohwert nehmen (nicht 0 wie beim Vario)
+    if (ti < w) {
+      const raw = sp[i];
+      out[i] = [ti, Number.isFinite(raw) ? raw : 0];
+      continue;
+    }
+
+    const a = ti - w;
+    const b = ti;
+
+    const area = areaAt(b) - areaAt(a);
+    const avg = area / (b - a);
+
+    out[i] = [ti, Number.isFinite(avg) ? avg : 0];
+  }
+
+  return out;
+}
+
+
 function extractTSec(params: any): number | null {
   const v = params?.value ?? params?.data?.value ?? params?.data;
 
@@ -234,37 +318,6 @@ type SegmentStats = {
   longestClimbDurSec: number | null;
   longestClimbDAlt: number | null;
 };
-
-function vAt(varioSeries: [number, number][], t: number): number {
-  const n = varioSeries.length;
-  if (!n) return 0;
-
-  // clamp to bounds
-  if (t <= varioSeries[0][0]) return varioSeries[0][1];
-  if (t >= varioSeries[n - 1][0]) return varioSeries[n - 1][1];
-
-  // binary search: find right index r where t <= t_r
-  let lo = 0;
-  let hi = n - 1;
-  while (lo < hi) {
-    const mid = (lo + hi) >> 1;
-    if (varioSeries[mid][0] < t) lo = mid + 1;
-    else hi = mid;
-  }
-  const r = lo;
-  const l = r - 1;
-
-  const t0 = varioSeries[l][0];
-  const v0 = varioSeries[l][1];
-  const t1 = varioSeries[r][0];
-  const v1 = varioSeries[r][1];
-
-  const dt = t1 - t0;
-  if (dt <= 0) return v1;
-
-  const a = (t - t0) / dt;
-  return v0 + (v1 - v0) * a;
-}
 
 /**
  * Wichtig: vAvg/vMax/vMin werden aus DERSELBEN Vario-Reihe berechnet,
@@ -688,7 +741,8 @@ export default function FlightDetailsRoute() {
     if (!computed) return null;
 
     const alt = computed.series.map((p) => [p.tSec, p.altitudeM] as [number, number]);
-    const hSpeed = computed.series.map((p) => [p.tSec, p.gSpeedKmh] as [number, number]);
+    const hSpeed = calculateSmoothedSpeedFromSeries(computed.series, 4);
+
 
     // ✅ NEU: vario = zeitbasiert (Default 4s), und wird auch für Stats verwendet
     const vSpeed = calculateVarioFromSeries(computed.series, varioWindowSec);
@@ -898,8 +952,7 @@ export default function FlightDetailsRoute() {
           name: "Ground speed",
           type: "line",
           data: chartData.hSpeed,
-          smooth: 1,
-          smoothMonotone: "x",
+
           showSymbol: false,
           lineStyle: { width: 2 },
         },

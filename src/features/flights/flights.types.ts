@@ -45,3 +45,20 @@ export interface FlightRecordDetails {
     // Visibility / access control
     visibility: 'private' | 'public' | 'club';
 }
+
+export type RemoveResult = { id: number };
+
+export interface GPSPoint {
+    tSec: number;
+    tAbsSec: number;
+    lat: number;
+    lng: number;
+    alt: number;
+}
+
+
+export interface FlightRecord extends FlightRecordDetails {
+
+    igcContent: string;
+
+}

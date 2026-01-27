@@ -29,6 +29,9 @@ export function calculateFlightMetrics(
 
     const fixes: Fix[] = [];
 
+    let sumPositiveRates = 0;
+    let positiveRateWindows = 0;
+
     const lines = igc.split('\n');
 
     for (const line of lines) {
@@ -136,7 +139,11 @@ export function calculateFlightMetrics(
             if (windowTime >= RATE_WINDOW) {
                 const rate = windowAlt / windowTime;
 
-                if (rate > 0) maxClimbRate = Math.max(maxClimbRate, rate);
+                if (rate > 0) {
+                    maxClimbRate = Math.max(maxClimbRate, rate);
+                    sumPositiveRates += rate;
+                    positiveRateWindows++;
+                }
                 if (rate < 0) maxSinkRate = Math.min(maxSinkRate, rate);
 
                 // Fenster zurücksetzen
@@ -145,6 +152,9 @@ export function calculateFlightMetrics(
             }
         }
     }
+
+    const avgPositiveClimbRateMs =
+        positiveRateWindows > 0 ? sumPositiveRates / positiveRateWindows : 0;
 
     return {
         totalDistanceKm: Number(totalDistanceKm.toFixed(2)),
@@ -155,5 +165,7 @@ export function calculateFlightMetrics(
         maxSinkRateMs: Number(maxSinkRate.toFixed(2)),
         startAltitudeM: Math.round(fixes[0].altitude),
         landingAltitudeM: Math.round(fixes[fixes.length - 1].altitude),
+        avgClimbRateMs: Number(avgPositiveClimbRateMs.toFixed(2)),
+        fixCount: fixes.length
     };
 }

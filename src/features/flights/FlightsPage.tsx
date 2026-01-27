@@ -18,6 +18,7 @@ import { Outlet } from "@tanstack/react-router";
 import { useFlightsStore } from "./store/flights.store";
 import { useAuthStore } from "../auth/store/auth.store";
 import { FlightsTableBareVirtual } from "./FlightsTableDynamic";
+import { flightApiLocal } from "./flights.api.local";
 
 
 function getErrorMessage(err: unknown, fallback: string) {
@@ -109,7 +110,7 @@ export function FlightsPage() {
 
 
         try {
-            await flightApi.uploadMany(files, token);
+            await flightApiLocal.uploadMany(files, token);
 
             await loadFlights(token);
 

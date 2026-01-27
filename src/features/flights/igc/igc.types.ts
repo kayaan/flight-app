@@ -7,4 +7,7 @@ export type FlightMetrics = {
     maxSinkRateMs: number;
     startAltitudeM: number;
     landingAltitudeM: number;
+
+    avgClimbRateMs: number;
+    fixCount: number;
 };
