@@ -12,25 +12,22 @@ import {
     Box,
 } from "@mantine/core";
 import { IconAlertCircle, IconUpload } from "@tabler/icons-react";
-import { flightApi } from "./flights.api";
 import { modals } from "@mantine/modals";
 import { Outlet } from "@tanstack/react-router";
+
+import { flightApiLocal } from "./flights.api.local";
+
 import { useFlightsStore } from "./store/flights.store";
 import { useAuthStore } from "../auth/store/auth.store";
 import { FlightsTableBareVirtual } from "./FlightsTableDynamic";
-import { flightApiLocal } from "./flights.api.local";
-
 
 function getErrorMessage(err: unknown, fallback: string) {
-    if (err instanceof Error && err.message) {
-        return err.message;
-    }
+    if (err instanceof Error && err.message) return err.message;
     return fallback;
 }
 
 export function FlightsPage() {
     const token = useAuthStore((s) => s.token);
-
 
     const flights = useFlightsStore((s) => s.flights);
     const status = useFlightsStore((s) => s.status);
@@ -48,72 +45,75 @@ export function FlightsPage() {
         if (flights.length === 0) return null;
 
         const dates = flights
-            .map((r) => new Date(r.flightDate!))
-            .filter((d) => !isNaN(d.getTime()));
+            .map((r) => (r.flightDate ? new Date(r.flightDate) : null))
+            .filter((d): d is Date => !!d && !isNaN(d.getTime()));
 
         if (dates.length === 0) return null;
 
         const min = new Date(Math.min(...dates.map((d) => d.getTime())));
         const max = new Date(Math.max(...dates.map((d) => d.getTime())));
-
         return { min, max };
     }, [flights]);
-
-    const confirmDeleteFlight = async (id: number, originalFilename?: string | null) => {
-        modals.openConfirmModal({
-            title: "Flight löschen?",
-            children: (
-                <Text size="sm">
-                    Willst du diesen Flug wirklich löschen
-                    {originalFilename ? `: ${originalFilename}` : ""}? Das kann nicht rückgängig gemacht werden.
-                </Text>
-            ),
-            labels: { confirm: "Löschen", cancel: "Abbrechen" },
-            confirmProps: { color: "red" },
-            onConfirm: () => deleteFlight(id),
-        });
-
-    }
 
     const deleteFlight = async (id: number) => {
         if (!token) return;
 
         setDeletingId(id);
+        setError(null);
 
         try {
-            await flightApi.remove(id, token);
+            await flightApiLocal.remove(id, token);
+
             await loadFlights(token, { force: true });
         } catch (e) {
-            setError(getErrorMessage(e, 'Failed to delete flight'));
+            setError(getErrorMessage(e, "Failed to delete flight"));
         } finally {
             setDeletingId(null);
         }
-    }
+    };
 
+    const confirmDeleteFlight = (
+        id: number,
+        originalFilename?: string | null
+    ) => {
+        modals.openConfirmModal({
+            title: "Delete flight?",
+            children: (
+                <Text size="sm">
+                    Do you really want to delete this flight
+                    {originalFilename ? `: ${originalFilename}` : ""}? This action cannot
+                    be undone.
+                </Text>
+            ),
+            labels: { confirm: "Delete", cancel: "Cancel" },
+            confirmProps: { color: "red" },
+            onConfirm: () => deleteFlight(id),
+        });
+    };
 
     React.useEffect(() => {
         if (!token) return;
 
+        // Initial load: no force needed
         void loadFlights(token);
     }, [token, loadFlights]);
 
     async function uploadMany(files: File[]) {
-        if (!files || files.length === 0) {
-            return;
-        }
+        if (!files || files.length === 0) return;
+
         if (!token) {
             setError("Not authenticated");
             return;
         }
+
         setUploading(true);
         setError(null);
 
-
         try {
+            // Using local API here
             await flightApiLocal.uploadMany(files, token);
 
-            await loadFlights(token);
-
+            await loadFlights(token, { force: true });
         } catch (e: unknown) {
             setError(getErrorMessage(e, "Upload failed"));
         } finally {
@@ -126,15 +126,16 @@ export function FlightsPage() {
             setError("Not authenticated");
             return;
         }
+
         if (!confirm("Delete ALL flights? This cannot be undone.")) return;
 
         setDeletingAll(true);
         setError(null);
 
         try {
-            await flightApi.deleteAll(token);
-            await loadFlights(token);
+            await flightApiLocal.deleteAll(token);
 
+            await loadFlights(token, { force: true });
         } catch (e: unknown) {
             setError(getErrorMessage(e, "Delete all failed"));
         } finally {
@@ -144,42 +145,50 @@ export function FlightsPage() {
 
     if (!token) {
         return (
-            <Alert icon={<IconAlertCircle size={16} />} title="Login required" color="yellow">
-                Please login to view your flights.
+            <Alert
+                icon={<IconAlertCircle size={16} />}
+                title="Login required"
+                color="yellow"
+            >
+                Please log in to view your flights.
             </Alert>
         );
     }
 
     const busy = loading || uploading || deletingAll;
+    const actionsDisabled = busy;
 
-    const actionsDisabled = loading || uploading || deletingAll;
-    if (!token) {
-        return (
-            <Alert>
-                Please login to view your flights.
-            </Alert>
-        );
-    }
     return (
         <Box h="100vh">
             <Stack gap="md">
-                <LoadingOverlay visible={busy} zIndex={1000} overlayProps={{ radius: "md", blur: 1 }} />
+                <LoadingOverlay
+                    visible={busy}
+                    zIndex={1000}
+                    overlayProps={{ radius: "md", blur: 1 }}
+                />
+
                 <Group justify="space-between" align="center">
                     <div>
-                        <Title order={2}>Flights {flights.length}
+                        <Title order={2}>
+                            Flights {flights.length}
                             {dateRange && (
                                 <Text span c="dimmed" size="sm" ml="sm">
-                                    ({dateRange.min.toLocaleDateString()} – {dateRange.max.toLocaleDateString()})
+                                    ({dateRange.min.toLocaleDateString()} –{" "}
+                                    {dateRange.max.toLocaleDateString()})
                                 </Text>
                             )}
                         </Title>
                         <Text c="dimmed" size="sm">
-                            Upload IGC and manage metadata
+                            Upload IGC files and manage metadata
                         </Text>
                     </div>
 
                     <Group>
-                        <Button variant="light" onClick={() => token && loadFlights(token, { force: true })} disabled={actionsDisabled}>
+                        <Button
+                            variant="light"
+                            onClick={() => loadFlights(token, { force: true })}
+                            disabled={actionsDisabled}
+                        >
                             Refresh
                         </Button>
 
@@ -192,7 +201,11 @@ export function FlightsPage() {
                             Delete all
                         </Button>
 
-                        <FileButton multiple onChange={(files) => uploadMany(files ?? [])} accept=".igc">
+                        <FileButton
+                            multiple
+                            onChange={(files) => uploadMany(files ?? [])}
+                            accept=".igc"
+                        >
                             {(props) => (
                                 <Button
                                     {...props}
@@ -218,14 +231,6 @@ export function FlightsPage() {
                         <Loader />
                     </Group>
                 ) : (
-                    // <FlightsTableSimpleFast
-                    //     flights={flights}
-                    //     deletingId={deletingId}
-                    //     onDelete={confirmDeleteFlight}
-                    // />
-
-                    // <FlightsTableBare flights={flights} deletingId={deletingId} onDelete={confirmDeleteFlight} />
-
                     <FlightsTableBareVirtual
                         flights={flights}
                         deletingId={deletingId}
@@ -233,7 +238,8 @@ export function FlightsPage() {
                     />
                 )}
             </Stack>
+
             <Outlet />
-        </Box >
+        </Box>
     );
 }
