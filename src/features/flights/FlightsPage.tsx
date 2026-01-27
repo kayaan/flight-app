@@ -18,7 +18,6 @@ import { Outlet } from "@tanstack/react-router";
 import { flightApiLocal } from "./flights.api.local";
 
 import { useFlightsStore } from "./store/flights.store";
-import { useAuthStore } from "../auth/store/auth.store";
 import { FlightsTableBareVirtual } from "./FlightsTableDynamic";
 
 function getErrorMessage(err: unknown, fallback: string) {
@@ -27,8 +26,8 @@ function getErrorMessage(err: unknown, fallback: string) {
 }
 
 export function FlightsPage() {
-    const token = useAuthStore((s) => s.token);
 
+    const token = "t";
     const flights = useFlightsStore((s) => s.flights);
     const status = useFlightsStore((s) => s.status);
     const loadFlights = useFlightsStore((s) => s.load);
@@ -101,10 +100,10 @@ export function FlightsPage() {
     async function uploadMany(files: File[]) {
         if (!files || files.length === 0) return;
 
-        if (!token) {
-            setError("Not authenticated");
-            return;
-        }
+        // if (!token) {
+        //     setError("Not authenticated");
+        //     return;
+        // }
 
         setUploading(true);
         setError(null);
@@ -122,10 +121,10 @@ export function FlightsPage() {
     }
 
     async function deleteAll() {
-        if (!token) {
-            setError("Not authenticated");
-            return;
-        }
+        // if (!token) {
+        //     setError("Not authenticated");
+        //     return;
+        // }
 
         if (!confirm("Delete ALL flights? This cannot be undone.")) return;
 
@@ -141,18 +140,6 @@ export function FlightsPage() {
         } finally {
             setDeletingAll(false);
         }
-    }
-
-    if (!token) {
-        return (
-            <Alert
-                icon={<IconAlertCircle size={16} />}
-                title="Login required"
-                color="yellow"
-            >
-                Please log in to view your flights.
-            </Alert>
-        );
     }
 
     const busy = loading || uploading || deletingAll;
@@ -186,7 +173,7 @@ export function FlightsPage() {
                     <Group>
                         <Button
                             variant="light"
-                            onClick={() => loadFlights(token, { force: true })}
+                            onClick={() => loadFlights(token ?? "", { force: true })}
                             disabled={actionsDisabled}
                         >
                             Refresh

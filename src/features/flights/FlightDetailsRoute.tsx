@@ -690,7 +690,7 @@ export function FlightDetailsRoute() {
       setFlight(null);
 
       try {
-        if (!token) throw new Error("Not authenticated");
+        // if (!token) throw new Error("Not authenticated");
 
         const numericId = Number(id);
         if (!Number.isFinite(numericId)) throw new Error("Invalid flight id");

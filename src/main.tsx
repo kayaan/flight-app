@@ -1,6 +1,6 @@
 import { createRoot } from 'react-dom/client'
 import './index.css'
-// import App from './App.tsx'
+import { registerSW } from "virtual:pwa-register";
 import { routeTree } from './routeTree.gen'
 import { createRouter, RouterProvider } from '@tanstack/react-router'
 
@@ -16,6 +16,17 @@ declare module '@tanstack/react-router' {
     router: typeof router
   }
 }
+
+const updateSW = registerSW({
+  onNeedRefresh() {
+    // minimaler prompt – später können wir Mantine Modal nutzen
+    const ok = confirm("New version available. Reload now?");
+    if (ok) updateSW(true);
+  },
+  onOfflineReady() {
+    console.log("App ready to work offline.");
+  },
+});
 
 createRoot(document.getElementById('root')!).render(
   // <StrictMode>
