@@ -173,7 +173,7 @@ export function FlightsPage() {
                             Flights {flights.length}
                             {dateRange && (
                                 <Text span c="dimmed" size="sm" ml="sm">
-                                    ({dateRange.min.toLocaleDateString()} –{" "}
+                                    ({dateRange.min.toLocaleDateString()} -{" "}
                                     {dateRange.max.toLocaleDateString()})
                                 </Text>
                             )}
@@ -243,3 +243,5 @@ export function FlightsPage() {
         </Box>
     );
 }
+
+
