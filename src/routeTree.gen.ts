@@ -13,6 +13,7 @@ import { Route as PersonalRouteImport } from './routes/personal'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as FlightsRouteImport } from './routes/flights'
 import { Route as AboutRouteImport } from './routes/about'
+import { Route as R404RouteImport } from './routes/$404'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as FlightsIndexRouteImport } from './routes/flights.index'
 import { Route as FlightsIdRouteImport } from './routes/flights.$id'
@@ -37,6 +38,11 @@ const AboutRoute = AboutRouteImport.update({
   path: '/about',
   getParentRoute: () => rootRouteImport,
 } as any)
+const R404Route = R404RouteImport.update({
+  id: '/$404',
+  path: '/$404',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
@@ -55,6 +61,7 @@ const FlightsIdRoute = FlightsIdRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/$404': typeof R404Route
   '/about': typeof AboutRoute
   '/flights': typeof FlightsRouteWithChildren
   '/login': typeof LoginRoute
@@ -64,6 +71,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/$404': typeof R404Route
   '/about': typeof AboutRoute
   '/login': typeof LoginRoute
   '/personal': typeof PersonalRoute
@@ -73,6 +81,7 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/$404': typeof R404Route
   '/about': typeof AboutRoute
   '/flights': typeof FlightsRouteWithChildren
   '/login': typeof LoginRoute
@@ -84,6 +93,7 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/$404'
     | '/about'
     | '/flights'
     | '/login'
@@ -91,10 +101,18 @@ export interface FileRouteTypes {
     | '/flights/$id'
     | '/flights/'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/about' | '/login' | '/personal' | '/flights/$id' | '/flights'
+  to:
+    | '/'
+    | '/$404'
+    | '/about'
+    | '/login'
+    | '/personal'
+    | '/flights/$id'
+    | '/flights'
   id:
     | '__root__'
     | '/'
+    | '/$404'
     | '/about'
     | '/flights'
     | '/login'
@@ -105,6 +123,7 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  R404Route: typeof R404Route
   AboutRoute: typeof AboutRoute
   FlightsRoute: typeof FlightsRouteWithChildren
   LoginRoute: typeof LoginRoute
@@ -139,6 +158,13 @@ declare module '@tanstack/react-router' {
       path: '/about'
       fullPath: '/about'
       preLoaderRoute: typeof AboutRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/$404': {
+      id: '/$404'
+      path: '/$404'
+      fullPath: '/$404'
+      preLoaderRoute: typeof R404RouteImport
       parentRoute: typeof rootRouteImport
     }
     '/': {
@@ -180,6 +206,7 @@ const FlightsRouteWithChildren =
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  R404Route: R404Route,
   AboutRoute: AboutRoute,
   FlightsRoute: FlightsRouteWithChildren,
   LoginRoute: LoginRoute,

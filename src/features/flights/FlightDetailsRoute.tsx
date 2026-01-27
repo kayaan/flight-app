@@ -27,8 +27,6 @@ import { FlightMap, type FixPoint, type BaseMap } from "./map/FlightMapBase";
 import { useFlightHoverStore } from "./store/flightHover.store";
 import { useTimeWindowStore } from "./store/timeWindow.store";
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
-
 interface AxisPointerLabelParams {
   value: number | string | Date;
   axisDimension: "x" | "y" | "z" | string;
@@ -740,7 +738,6 @@ export function FlightDetailsRoute() {
     const hSpeed = calculateSmoothedSpeedFromSeries(computed.series, 4);
 
 
-    // ✅ NEU: vario = zeitbasiert (Default 4s), und wird auch für Stats verwendet
     const vSpeed = calculateVarioFromSeries(computed.series, varioWindowSec);
 
     const maxT = computed.series.length ? computed.series[computed.series.length - 1].tSec : 0;
