@@ -130,8 +130,6 @@ self.onmessage = (ev: MessageEvent<InMsg>) => {
 
     const fixesLite = rdpSimplifyFixes(fixes, epsilonMeters, minPointsNoRdp);
 
-    console.warn('web worker', fixesLite);
-
     const msg: OutMsg = { jobId, fixesLite };
     (self as DedicatedWorkerGlobalScope).postMessage(msg);
 };

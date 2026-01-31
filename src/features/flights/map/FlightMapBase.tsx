@@ -3,13 +3,15 @@
 // ✅ Fixes UI jank: no React re-render on hover; no Popup; lightweight circleMarker
 
 import * as React from "react";
-import { MapContainer, TileLayer, Polyline, useMap, useMapEvents } from "react-leaflet";
 import L, { type LatLngTuple, type LatLngBoundsExpression } from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { Box, Group, Text, RangeSlider } from "@mantine/core";
 import { useFlightHoverStore } from "../store/flightHover.store";
 import { useThrottledValue } from "@mantine/hooks";
 import { useTimeWindowStore } from "../store/timeWindow.store";
+
+import { MapContainer, TileLayer, Polyline, useMap, useMapEvents, Pane } from "react-leaflet";
+
 
 export type BaseMap = "osm" | "topo";
 
@@ -349,11 +351,42 @@ export function FlightMap({
     const [zoom, setZoom] = React.useState<number>(initialZoom);
     React.useEffect(() => setZoom(initialZoom), [initialZoom]);
 
+    // ✅ Drag state: while dragging slider => use lite polyline, hide colored chunks
+    const [isDragging, setIsDragging] = React.useState(false);
+
+    // Reset drag state when flight changes
+    React.useEffect(() => {
+        setIsDragging(false);
+    }, [watchKey, fixesFull.length]);
+
+    // ✅ Choose active fixes for base track only
+    const activeFixes = React.useMemo(() => {
+        if (!isDragging) return fixesFull;
+        // dragging: prefer lite if it is usable
+        if (fixesLite && fixesLite.length >= 2) return fixesLite;
+        return fixesFull;
+    }, [isDragging, fixesFull, fixesLite]);
+
+    // ✅ Full points (used for bounds/fit/center so map doesn't jump)
     const fullPoints = React.useMemo(() => {
         const out = new Array<LatLngTuple>(fixesFull.length);
         for (let i = 0; i < fixesFull.length; i++) out[i] = [fixesFull[i].lat, fixesFull[i].lon];
         return out;
     }, [fixesFull]);
+
+    // ✅ Active points (used only for faint base polyline)
+    const activePoints = React.useMemo(() => {
+        const src = activeFixes;
+        const out: LatLngTuple[] = [];
+        for (let i = 0; i < src.length; i++) {
+            const { lat, lon } = src[i];
+            if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
+            // optional: filter 0,0 if that can happen
+            if (lat === 0 && lon === 0) continue;
+            out.push([lat, lon]);
+        }
+        return out;
+    }, [activeFixes]);
 
     const totalSeconds = fixesFull.length ? fixesFull[fixesFull.length - 1].tSec : 0;
 
@@ -378,8 +411,8 @@ export function FlightMap({
     }, [rangeSec, totalSeconds]);
 
     React.useEffect(() => {
-        setWindow({ startSec, endSec, totalSec: totalSeconds })
-    }, [setWindow, startSec, endSec, totalSeconds])
+        setWindow({ startSec, endSec, totalSec: totalSeconds });
+    }, [setWindow, startSec, endSec, totalSeconds]);
 
     const { startIdx, endIdx } = React.useMemo(() => {
         if (fixesFull.length < 2) return { startIdx: 0, endIdx: 0 };
@@ -388,10 +421,12 @@ export function FlightMap({
         return { startIdx: s, endIdx: e };
     }, [fixesFull, startSec, endSec]);
 
+    // ✅ expensive: compute only when NOT dragging
     const colorChunks = React.useMemo(() => {
         if (!hasTrack) return [];
+        if (isDragging) return [];
         return buildChunksFromFixesWindow(fixesFull, startIdx, endIdx);
-    }, [hasTrack, fixesFull, startIdx, endIdx]);
+    }, [hasTrack, isDragging, fixesFull, startIdx, endIdx]);
 
     const center: LatLngTuple = fullPoints.length ? fullPoints[0] : [48.1372, 11.5756];
     const bounds = React.useMemo(() => computeBounds(fullPoints), [fullPoints]);
@@ -405,6 +440,18 @@ export function FlightMap({
     const startPct = pct(startSec, totalSeconds);
     const endPct = pct(endSec, totalSeconds);
 
+    React.useEffect(() => {
+        if (!isDragging) return;
+        console.log(
+            "DRAG activePoints",
+            activePoints.length,
+            "first",
+            activePoints[0],
+            "last",
+            activePoints[activePoints.length - 1]
+        );
+    }, [isDragging, activePoints]);
+
     return (
         <Box style={{ display: "flex", flexDirection: "column", height: "100%" }}>
             <Group justify="space-between" mb="xs">
@@ -416,7 +463,12 @@ export function FlightMap({
 
             <RangeSlider
                 value={immediateValue}
-                onChange={(v) => setImmediateValue([Math.min(v[0], v[1]), Math.max(v[0], v[1])])}
+                onChange={(v) => {
+                    setIsDragging(true);
+                    setImmediateValue([Math.min(v[0], v[1]), Math.max(v[0], v[1])]);
+                }}
+                // ✅ Mantine supports onChangeEnd (but not onChangeStart)
+                onChangeEnd={() => setIsDragging(false)}
                 min={0}
                 max={totalSeconds}
                 step={1}
@@ -434,10 +486,14 @@ export function FlightMap({
                 >
                     <TileLayer key={tile.key} url={tile.url} attribution={tile.attribution} />
 
-                    {/* Base (faint) track */}
-                    {fullPoints.length >= 2 && (
+                    <Pane name="trackPane" style={{ zIndex: 450 }} />
+
+                    {/* Base (faint) track: ✅ switches full/lite while dragging */}
+                    {activePoints.length >= 2 && (
                         <Polyline
-                            positions={fullPoints}
+                            pane="trackPane"
+                            key={`${String(watchKey ?? "flight")}-${isDragging ? "lite" : "full"}-${activePoints.length}`}
+                            positions={activePoints}
                             pathOptions={{
                                 color: "rgba(120,120,130,0.55)",
                                 weight: Math.max(2.2, line * 0.9),
@@ -448,10 +504,11 @@ export function FlightMap({
                         />
                     )}
 
-                    {/* ✅ Hover marker (imperative, no React re-render on hover) */}
+
+                    {/* ✅ Hover marker stays FULL for exactness */}
                     <HoverMarker fixes={fixesFull} followEnabled={followEnabled} />
 
-                    {/* Colored chunks: outline + main line */}
+                    {/* Colored chunks: ✅ only when NOT dragging */}
                     {colorChunks.map((ch, i) => (
                         <Polyline
                             key={`o-${i}`}
