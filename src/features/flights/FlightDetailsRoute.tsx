@@ -753,7 +753,7 @@ export function FlightDetailsRoute() {
     // UI kann sofort rendern → erstmal Full verwenden
     setFixesLite(full);
 
-    const RDP_MIN_POINTS = 2000;   // unterhalb kein RDP
+    const RDP_MIN_POINTS = 1000;   // unterhalb kein RDP
     const RDP_EPS_METERS = 20;    // 10–30m ist praxisnah für Paragliding
 
     if (full.length < RDP_MIN_POINTS) return;

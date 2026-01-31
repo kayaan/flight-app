@@ -112,6 +112,7 @@ function FitToTrackOnce({
     return null;
 }
 
+
 function ZoomWatcher({ onZoom }: { onZoom: (z: number) => void }) {
     const lastRef = React.useRef<number | null>(null);
 
@@ -282,7 +283,6 @@ function ActiveTrackLayer({
         const line = lineRef.current;
         if (!line) return;
         line.setLatLngs(points && points.length >= 2 ? points : []);
-        // @ts-expect-error redraw exists
         line.redraw?.();
     }, [points]);
 
@@ -290,7 +290,6 @@ function ActiveTrackLayer({
         const line = lineRef.current;
         if (!line) return;
         line.setStyle({ weight, color, opacity });
-        // @ts-expect-error redraw exists
         line.redraw?.();
     }, [weight, color, opacity]);
 
@@ -298,9 +297,8 @@ function ActiveTrackLayer({
         const line = lineRef.current;
         if (!line) return;
         line.setLatLngs(points && points.length >= 2 ? points : []);
-        // @ts-expect-error redraw exists
         line.redraw?.();
-    }, [watchKey]);
+    }, [watchKey, points]);
 
     return null;
 }
@@ -488,12 +486,6 @@ export function FlightMap({
         setIsDragging(false);
     }, [watchKey, fixesFull.length]);
 
-    const activeFixes = React.useMemo(() => {
-        if (!isDragging) return fixesFull;
-        if (fixesLite && fixesLite.length >= 2) return fixesLite;
-        return fixesFull;
-    }, [isDragging, fixesFull, fixesLite]);
-
     const fullPoints = React.useMemo(() => {
         const out = new Array<LatLngTuple>(fixesFull.length);
         for (let i = 0; i < fixesFull.length; i++) out[i] = [fixesFull[i].lat, fixesFull[i].lon];
@@ -528,19 +520,6 @@ export function FlightMap({
         const src = fixesLite && fixesLite.length >= 2 ? fixesLite : fixesFull;
         return sliceFixesByWindow(src, startSec, endSec);
     }, [isDragging, fixesLite, fixesFull, startSec, endSec]);
-
-
-    const activePoints = React.useMemo(() => {
-        const src = activeFixes;
-        const out: LatLngTuple[] = [];
-        for (let i = 0; i < src.length; i++) {
-            const { lat, lon } = src[i];
-            if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
-            if (lat === 0 && lon === 0) continue;
-            out.push([lat, lon]);
-        }
-        return out;
-    }, [activeFixes]);
 
 
     React.useEffect(() => {
