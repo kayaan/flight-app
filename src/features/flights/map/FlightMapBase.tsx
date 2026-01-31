@@ -331,15 +331,17 @@ function HoverMarker({
 export function FlightMap({
     baseMap = "osm",
     watchKey,
-    fixes,
+    fixesFull,
+    fixesLite,
     followEnabled = true,
 }: {
     baseMap?: BaseMap;
     watchKey?: unknown;
-    fixes: FixPoint[];
+    fixesFull: FixPoint[];
+    fixesLite: FixPoint[];
     followEnabled: boolean;
 }) {
-    const hasTrack = fixes.length >= 2;
+    const hasTrack = fixesFull.length >= 2;
     const initialZoom = hasTrack ? 13 : 11;
 
     const setWindow = useTimeWindowStore((s) => s.setWindowThrottled);
@@ -348,12 +350,12 @@ export function FlightMap({
     React.useEffect(() => setZoom(initialZoom), [initialZoom]);
 
     const fullPoints = React.useMemo(() => {
-        const out = new Array<LatLngTuple>(fixes.length);
-        for (let i = 0; i < fixes.length; i++) out[i] = [fixes[i].lat, fixes[i].lon];
+        const out = new Array<LatLngTuple>(fixesFull.length);
+        for (let i = 0; i < fixesFull.length; i++) out[i] = [fixesFull[i].lat, fixesFull[i].lon];
         return out;
-    }, [fixes]);
+    }, [fixesFull]);
 
-    const totalSeconds = fixes.length ? fixes[fixes.length - 1].tSec : 0;
+    const totalSeconds = fixesFull.length ? fixesFull[fixesFull.length - 1].tSec : 0;
 
     // ✅ Slider values are SECONDS (precise), UI label shows %
     const [immediateValue, setImmediateValue] = React.useState<[number, number]>([0, 0]);
@@ -380,16 +382,16 @@ export function FlightMap({
     }, [setWindow, startSec, endSec, totalSeconds])
 
     const { startIdx, endIdx } = React.useMemo(() => {
-        if (fixes.length < 2) return { startIdx: 0, endIdx: 0 };
-        const s = clamp(lowerBoundTSec(fixes, startSec), 0, fixes.length - 2);
-        const e = clamp(upperBoundTSec(fixes, endSec), s + 1, fixes.length - 1);
+        if (fixesFull.length < 2) return { startIdx: 0, endIdx: 0 };
+        const s = clamp(lowerBoundTSec(fixesFull, startSec), 0, fixesFull.length - 2);
+        const e = clamp(upperBoundTSec(fixesFull, endSec), s + 1, fixesFull.length - 1);
         return { startIdx: s, endIdx: e };
-    }, [fixes, startSec, endSec]);
+    }, [fixesFull, startSec, endSec]);
 
     const colorChunks = React.useMemo(() => {
         if (!hasTrack) return [];
-        return buildChunksFromFixesWindow(fixes, startIdx, endIdx);
-    }, [hasTrack, fixes, startIdx, endIdx]);
+        return buildChunksFromFixesWindow(fixesFull, startIdx, endIdx);
+    }, [hasTrack, fixesFull, startIdx, endIdx]);
 
     const center: LatLngTuple = fullPoints.length ? fullPoints[0] : [48.1372, 11.5756];
     const bounds = React.useMemo(() => computeBounds(fullPoints), [fullPoints]);
@@ -447,7 +449,7 @@ export function FlightMap({
                     )}
 
                     {/* ✅ Hover marker (imperative, no React re-render on hover) */}
-                    <HoverMarker fixes={fixes} followEnabled={followEnabled} />
+                    <HoverMarker fixes={fixesFull} followEnabled={followEnabled} />
 
                     {/* Colored chunks: outline + main line */}
                     {colorChunks.map((ch, i) => (

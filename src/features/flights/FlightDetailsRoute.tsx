@@ -723,21 +723,78 @@ export function FlightDetailsRoute() {
     return parseIgcFixes(flight.igcContent, flight.flightDate);
   }, [flight]);
 
+
   const computed = React.useMemo(() => {
     if (!fixesFull) return null;
 
     const { series } = buildFlightSeries(fixesFull, windowSec);
 
     const t0 = fixesFull[0]?.tSec ?? 0;
-    const fixes: FixPoint[] = fixesFull.map((f) => ({
+    const fixesFullRel: FixPoint[] = fixesFull.map((f) => ({
       tSec: f.tSec - t0,
       lat: f.lat,
       lon: f.lon,
       altitudeM: f.altitudeM,
     }));
 
-    return { series, fixes };
+    return { series, fixesFull: fixesFullRel };
   }, [fixesFull, windowSec]);
+
+  const [fixesLite, setFixesLite] = React.useState<FixPoint[] | null>(null);
+  const rdpJobRef = React.useRef(0);
+
+  React.useEffect(() => {
+    const full = computed?.fixesFull;
+    if (!full || full.length < 2) {
+      setFixesLite(null);
+      return;
+    }
+
+    // UI kann sofort rendern → erstmal Full verwenden
+    setFixesLite(full);
+
+    const RDP_MIN_POINTS = 2000;   // unterhalb kein RDP
+    const RDP_EPS_METERS = 20;    // 10–30m ist praxisnah für Paragliding
+
+    if (full.length < RDP_MIN_POINTS) return;
+
+    const jobId = ++rdpJobRef.current;
+
+    const worker = new Worker(
+      new URL("./map/rdp.worker.ts", import.meta.url),
+      { type: "module" }
+    );
+
+    worker.onmessage = (ev: MessageEvent<{ jobId: number; fixesLite: FixPoint[] }>) => {
+      if (ev.data?.jobId !== jobId) return; // altes Ergebnis ignorieren
+      setFixesLite(ev.data.fixesLite);
+      worker.terminate();
+    };
+
+    worker.onerror = () => {
+      worker.terminate(); // Fallback: wir bleiben bei Full
+    };
+
+    worker.postMessage({
+      jobId,
+      fixes: full,
+      epsilonMeters: RDP_EPS_METERS,
+      minPointsNoRdp: RDP_MIN_POINTS,
+    });
+
+    return () => {
+      worker.terminate();
+    };
+  }, [computed?.fixesFull]);
+
+  const computedWithLite = React.useMemo(() => {
+    if (!computed) return null;
+    return {
+      ...computed,
+      fixesLite: fixesLite ?? computed.fixesFull,
+    };
+  }, [computed, fixesLite]);
+
 
   const chartData = React.useMemo(() => {
     if (!computed) return null;
@@ -1417,7 +1474,13 @@ export function FlightDetailsRoute() {
                 Map
               </Text>
               <Box style={{ flex: 1, minHeight: 0 }}>
-                <FlightMap fixes={computed.fixes} baseMap={baseMap} watchKey={`${id}-${baseMap}`} followEnabled={followEnabled} />
+                <FlightMap
+                  fixesFull={computedWithLite?.fixesFull ?? []}
+                  fixesLite={computedWithLite?.fixesLite ?? []}
+                  baseMap={baseMap}
+                  watchKey={`${id}-${baseMap}`}
+                  followEnabled={followEnabled}
+                />
               </Box>
             </Box>
           </Box>
