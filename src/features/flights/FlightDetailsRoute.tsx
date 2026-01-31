@@ -535,6 +535,9 @@ function fmtSigned(n: number, digits = 0) {
   return `${s}${n.toFixed(digits)}`;
 }
 
+
+
+
 export function FlightDetailsRoute() {
   const token = useAuthStore((s) => s.token);
   const { id } = useParams({ from: "/flights/$id" });
@@ -542,6 +545,11 @@ export function FlightDetailsRoute() {
   const FOLLOW_KEY = "flyapp.flightDetails.followMarker";
   const STATS_KEY = "flyapp.flightDetails.showStats";
   const VARIO_WIN_KEY = "flyapp.flightDetails.varioWindowSec";
+
+  const SHOW_ALT_KEY = "flyapp.flightDetails.showChart.alt";
+  const SHOW_VARIO_KEY = "flyapp.flightDetails.showChart.vario";
+  const SHOW_SPEED_KEY = "flyapp.flightDetails.showChart.speed";
+
 
   const [followEnabled, setFollowEnabled] = React.useState<boolean>(() => {
     try {
@@ -695,7 +703,7 @@ export function FlightDetailsRoute() {
         const numericId = Number(id);
         if (!Number.isFinite(numericId)) throw new Error("Invalid flight id");
 
-        const f = await flightApi.getFlightById(numericId, token);
+        const f = await flightApi.getFlightById(numericId, token ?? "");
         if (!cancelled) setFlight(f);
       } catch (e: any) {
         if (!cancelled) setError(e?.message ?? "Failed to load flight");
@@ -961,26 +969,93 @@ export function FlightDetailsRoute() {
     };
   }, [chartData, baseOption, windowMarkLine]);
 
+  const [showAlt, setShowAlt] = React.useState<boolean>(() => {
+    try {
+      const raw = localStorage.getItem(SHOW_ALT_KEY);
+      if (raw == null) return true; // default ON
+      return raw === "1";
+    } catch {
+      return true;
+    }
+  });
+
+  const [showVario, setShowVario] = React.useState<boolean>(() => {
+    try {
+      const raw = localStorage.getItem(SHOW_VARIO_KEY);
+      if (raw == null) return true;
+      return raw === "1";
+    } catch {
+      return true;
+    }
+  });
+
+  const [showSpeed, setShowSpeed] = React.useState<boolean>(() => {
+    try {
+      const raw = localStorage.getItem(SHOW_SPEED_KEY);
+      if (raw == null) return true;
+      return raw === "1";
+    } catch {
+      return true;
+    }
+  });
+
+  React.useEffect(() => {
+    try {
+      localStorage.setItem(SHOW_ALT_KEY, showAlt ? "1" : "0");
+    } catch { }
+  }, [showAlt]);
+
+  React.useEffect(() => {
+    try {
+      localStorage.setItem(SHOW_VARIO_KEY, showVario ? "1" : "0");
+    } catch { }
+  }, [showVario]);
+
+  React.useEffect(() => {
+    try {
+      localStorage.setItem(SHOW_SPEED_KEY, showSpeed ? "1" : "0");
+    } catch { }
+  }, [showSpeed]);
+
   React.useEffect(() => {
     const a = altInstRef.current;
     const v = varioInstRef.current;
     const s = speedInstRef.current;
 
+    // clean slate for this group
     echarts.disconnect(chartGroupId);
 
     if (!syncEnabled) return;
-    if (!a || !v || !s) return;
 
-    a.group = chartGroupId;
-    v.group = chartGroupId;
-    s.group = chartGroupId;
+    const instances: echarts.ECharts[] = [];
+
+    if (showAlt) {
+      if (!a) return;
+      instances.push(a);
+    }
+    if (showVario) {
+      if (!v) return;
+      instances.push(v);
+    }
+    if (showSpeed) {
+      if (!s) return;
+      instances.push(s);
+    }
+
+    // Sync only makes sense with 2+ visible charts
+    if (instances.length < 2) return;
+
+    for (const inst of instances) {
+      inst.group = chartGroupId;
+    }
 
     echarts.connect(chartGroupId);
 
     return () => {
       echarts.disconnect(chartGroupId);
     };
-  }, [chartGroupId, syncEnabled, chartsReadyTick]);
+  }, [chartGroupId, syncEnabled, chartsReadyTick, showAlt, showVario, showSpeed]);
+
 
   React.useEffect(() => {
     const t = window.setTimeout(() => {
@@ -1134,6 +1209,10 @@ export function FlightDetailsRoute() {
     s.dispatchAction?.({ type: "dataZoom", dataZoomIndex: 0, startValue: zs, endValue: ze });
   }, [chartData?.maxT, totalSec, startSec, endSec]);
 
+
+
+
+
   return (
     <Box p="md">
       <Stack gap="sm">
@@ -1161,6 +1240,10 @@ export function FlightDetailsRoute() {
             <Checkbox label="Charts sync" checked={syncEnabled} onChange={(e) => setSyncEnabled(e.currentTarget.checked)} />
             <Checkbox label="Follow marker" checked={followEnabled} onChange={(e) => setFollowEnabled(e.currentTarget.checked)} />
             <Checkbox label="Show stats" checked={showStats} onChange={(e) => setShowStats(e.currentTarget.checked)} />
+
+            <Checkbox label="Alt" checked={showAlt} onChange={(e) => setShowAlt(e.currentTarget.checked)} />
+            <Checkbox label="Vario" checked={showVario} onChange={(e) => setShowVario(e.currentTarget.checked)} />
+            <Checkbox label="Speed" checked={showSpeed} onChange={(e) => setShowSpeed(e.currentTarget.checked)} />
 
             {/* ✅ 4s default, änderbar */}
             <NumberInput
@@ -1210,66 +1293,107 @@ export function FlightDetailsRoute() {
               minHeight: 520,
             }}
           >
+
             {/* LEFT: Charts */}
-            <Box style={{ width: `${splitPct}%`, paddingRight: 12, minWidth: 320, overflow: "auto" }}>
-              <Stack gap="xs">
-                {StatsPanel}
+            <Box
+              style={{
+                width: `${splitPct}%`,
+                paddingRight: 12,
+                minWidth: 320,
+                display: "flex",
+                flexDirection: "column",
+                minHeight: 0,          // ✅ wichtig in flex layouts
+                overflow: "hidden",    // ✅ sonst “frisst” scroll die Höhe
+              }}
+            >
+              {/* Stats: nimmt nur benötigte Höhe */}
+              {StatsPanel}
 
-                <Box>
-                  <Text size="sm" fw={600} mb={4}>
-                    Altitude
-                  </Text>
-                  <EChartsReact
-                    onEvents={chartEvents}
-                    echarts={echarts}
-                    option={altOption}
-                    style={{ height: 320, width: "100%" }}
-                    notMerge
-                    onChartReady={(inst) => {
-                      altInstRef.current = inst;
-                      inst.group = chartGroupId;
-                      setChartsReadyTick((x) => x + 1);
-                    }}
-                  />
-                </Box>
+              {/* Charts: füllen den Rest */}
+              <Box
+                style={{
+                  flex: 1,
+                  minHeight: 0,        // ✅ erlaubt Kindern zu schrumpfen
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 10,
+                }}
+              >
+                {/* Chart 1 */}
+                {showAlt && (
+                  <Box style={{ flex: 1, minHeight: 140 }}>
+                    <Text size="sm" fw={600} mb={4}>
+                      Altitude
+                    </Text>
+                    <EChartsReact
+                      onEvents={chartEvents}
+                      echarts={echarts}
+                      option={altOption}
+                      style={{ height: "100%", width: "100%" }}
+                      notMerge
+                      onChartReady={(inst) => {
+                        altInstRef.current = inst;
+                        inst.group = chartGroupId;
+                        setChartsReadyTick((x) => x + 1);
+                      }}
+                    />
+                  </Box>
+                )}
 
-                <Box>
-                  <Text size="sm" fw={600} mb={4}>
-                    Vertical speed (Vario)
-                  </Text>
-                  <EChartsReact
-                    onEvents={chartEvents}
-                    echarts={echarts}
-                    option={varioOption}
-                    style={{ height: 220, width: "100%" }}
-                    notMerge
-                    onChartReady={(inst) => {
-                      varioInstRef.current = inst;
-                      inst.group = chartGroupId;
-                      setChartsReadyTick((x) => x + 1);
-                    }}
-                  />
-                </Box>
+                {/* Chart 2 */}
+                {showVario && (
+                  <Box style={{ flex: 1, minHeight: 140 }}>
+                    <Text size="sm" fw={600} mb={4}>
+                      Vertical speed (Vario)
+                    </Text>
+                    <EChartsReact
+                      onEvents={chartEvents}
+                      echarts={echarts}
+                      option={varioOption}
+                      style={{ height: "100%", width: "100%" }}
+                      notMerge
+                      onChartReady={(inst) => {
+                        varioInstRef.current = inst;
+                        inst.group = chartGroupId;
+                        setChartsReadyTick((x) => x + 1);
+                      }}
+                    />
+                  </Box>
+                )}
 
-                <Box>
-                  <Text size="sm" fw={600} mb={4}>
-                    Horizontal speed
-                  </Text>
-                  <EChartsReact
-                    onEvents={chartEvents}
-                    echarts={echarts}
-                    option={speedOption}
-                    style={{ height: 220, width: "100%" }}
-                    notMerge
-                    onChartReady={(inst) => {
-                      speedInstRef.current = inst;
-                      inst.group = chartGroupId;
-                      setChartsReadyTick((x) => x + 1);
-                    }}
-                  />
-                </Box>
-              </Stack>
+                {/* Chart 3 */}
+                {showSpeed && (
+                  <Box style={{ flex: 1, minHeight: 140 }}>
+                    <Text size="sm" fw={600} mb={4}>
+                      Horizontal speed
+                    </Text>
+                    <EChartsReact
+                      onEvents={chartEvents}
+                      echarts={echarts}
+                      option={speedOption}
+                      style={{ height: "100%", width: "100%" }}
+                      notMerge
+                      onChartReady={(inst) => {
+                        speedInstRef.current = inst;
+                        inst.group = chartGroupId;
+                        setChartsReadyTick((x) => x + 1);
+                      }}
+                    />
+                  </Box>
+                )}
+
+                {!showAlt && !showVario && !showSpeed && (
+                  <Paper withBorder p="md" radius="md">
+                    <Text c="dimmed" size="sm">
+                      No charts selected.
+                    </Text>
+                  </Paper>
+                )}
+
+              </Box>
             </Box>
+
+
 
             {/* MIDDLE: Splitter */}
             <Box
