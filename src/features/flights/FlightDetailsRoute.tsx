@@ -26,6 +26,7 @@ import type { SeriesPoint } from "./igc";
 import { FlightMap, type FixPoint, type BaseMap } from "./map/FlightMapBase";
 import { useFlightHoverStore } from "./store/flightHover.store";
 import { useTimeWindowStore } from "./store/timeWindow.store";
+import { useThrottledValue } from "@mantine/hooks";
 
 interface AxisPointerLabelParams {
   value: number | string | Date;
@@ -535,7 +536,121 @@ function fmtSigned(n: number, digits = 0) {
   return `${s}${n.toFixed(digits)}`;
 }
 
+// --- RDP (Ramer–Douglas–Peucker) for FixPoint[] ---
+// Simplifies the track geometry (lat/lon) while keeping tSec/altitudeM attached.
+// Uses a local equirectangular projection around lat0/lon0 so epsilon can be in meters.
 
+function metersPerDegLat() {
+  // good-enough for local tracks
+  return 111_320; // ~meters per degree latitude
+}
+function metersPerDegLon(latDeg: number) {
+  return 111_320 * Math.cos((latDeg * Math.PI) / 180);
+}
+
+function pointLineDistSqMeters(
+  px: number,
+  py: number,
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number
+) {
+  const abx = bx - ax;
+  const aby = by - ay;
+  const apx = px - ax;
+  const apy = py - ay;
+
+  const abLenSq = abx * abx + aby * aby;
+  if (abLenSq <= 1e-12) {
+    // A and B are the same point
+    return apx * apx + apy * apy;
+  }
+
+  // projection factor t on segment AB, clamped
+  let t = (apx * abx + apy * aby) / abLenSq;
+  if (t < 0) t = 0;
+  else if (t > 1) t = 1;
+
+  const cx = ax + t * abx;
+  const cy = ay + t * aby;
+
+  const dx = px - cx;
+  const dy = py - cy;
+  return dx * dx + dy * dy;
+}
+
+function rdpSimplifyFixes(
+  fixes: FixPoint[],
+  epsilonMeters: number,
+  minPointsNoRdp: number
+): FixPoint[] {
+  const n = fixes.length;
+  if (n < 3) return fixes;
+  if (n < minPointsNoRdp) return fixes;
+  if (!Number.isFinite(epsilonMeters) || epsilonMeters <= 0) return fixes;
+
+  // reference for local projection
+  const lat0 = fixes[0].lat;
+  const lon0 = fixes[0].lon;
+  const kLat = metersPerDegLat();
+  const kLon = metersPerDegLon(lat0);
+
+  // project to local meters (x east, y north)
+  const x = new Array<number>(n);
+  const y = new Array<number>(n);
+  for (let i = 0; i < n; i++) {
+    x[i] = (fixes[i].lon - lon0) * kLon;
+    y[i] = (fixes[i].lat - lat0) * kLat;
+  }
+
+  const epsSq = epsilonMeters * epsilonMeters;
+
+  // keep[i] indicates whether the point is kept in the simplified polyline
+  const keep = new Uint8Array(n);
+  keep[0] = 1;
+  keep[n - 1] = 1;
+
+  // iterative stack to avoid recursion depth issues
+  const stack: Array<[number, number]> = [];
+  stack.push([0, n - 1]);
+
+  while (stack.length) {
+    const [start, end] = stack.pop()!;
+    if (end <= start + 1) continue;
+
+    const ax = x[start], ay = y[start];
+    const bx = x[end], by = y[end];
+
+    let maxDistSq = -1;
+    let idx = -1;
+
+    for (let i = start + 1; i < end; i++) {
+      const dSq = pointLineDistSqMeters(x[i], y[i], ax, ay, bx, by);
+      if (dSq > maxDistSq) {
+        maxDistSq = dSq;
+        idx = i;
+      }
+    }
+
+    if (maxDistSq > epsSq && idx !== -1) {
+      keep[idx] = 1;
+      stack.push([start, idx]);
+      stack.push([idx, end]);
+    }
+  }
+
+  // materialize output in original order
+  const out: FixPoint[] = [];
+  out.reserve?.(0); // harmless if TS lib doesn't have it
+  for (let i = 0; i < n; i++) {
+    if (keep[i]) out.push(fixes[i]);
+  }
+
+  // Safety: ensure at least 2 points
+  if (out.length < 2) return [fixes[0], fixes[n - 1]];
+  return out;
+}
 
 
 export function FlightDetailsRoute() {
@@ -729,15 +844,23 @@ export function FlightDetailsRoute() {
     const { series } = buildFlightSeries(fixesFull, windowSec);
 
     const t0 = fixesFull[0]?.tSec ?? 0;
-    const fixes: FixPoint[] = fixesFull.map((f) => ({
+    const fixesFullRel: FixPoint[] = fixesFull.map((f) => ({
       tSec: f.tSec - t0,
       lat: f.lat,
       lon: f.lon,
       altitudeM: f.altitudeM,
     }));
 
-    return { series, fixes };
+    // --- Lite track (RDP) ---
+    // Tuneables (simple defaults)
+    const RDP_MIN_POINTS = 2000;     // small flights: skip RDP
+    const RDP_EPS_METERS = 20;       // how much geometry may deviate (preview only)
+
+    const fixesLite = rdpSimplifyFixes(fixesFullRel, RDP_EPS_METERS, RDP_MIN_POINTS);
+
+    return { series, fixesFull: fixesFullRel, fixesLite };
   }, [fixesFull, windowSec]);
+
 
   const chartData = React.useMemo(() => {
     if (!computed) return null;
@@ -789,6 +912,10 @@ export function FlightDetailsRoute() {
   const endSec = win?.endSec ?? 0;
   const totalSec = win?.totalSec ?? (chartData?.maxT ?? 0);
 
+  const statsRange = useThrottledValue<[number, number]>([startSec, endSec], 500); // z.B. 450ms
+  const statsStartSec = statsRange[0];
+  const statsEndSec = statsRange[1];
+
   const windowMarkLine = React.useMemo(
     () => buildWindowMarkLine(startSec, endSec, totalSec),
     [startSec, endSec, totalSec]
@@ -796,8 +923,8 @@ export function FlightDetailsRoute() {
 
   const segmentStats = React.useMemo(() => {
     if (!computed?.series || !chartData?.vSpeed) return null;
-    return computeSegmentStats(computed.series, chartData.vSpeed, startSec, endSec);
-  }, [computed?.series, chartData?.vSpeed, startSec, endSec]);
+    return computeSegmentStats(computed.series, chartData.vSpeed, statsStartSec, statsEndSec);
+  }, [computed?.series, chartData?.vSpeed, statsStartSec, statsEndSec]);
 
   const altOption = React.useMemo(() => {
     if (!chartData) return {};
@@ -1417,7 +1544,13 @@ export function FlightDetailsRoute() {
                 Map
               </Text>
               <Box style={{ flex: 1, minHeight: 0 }}>
-                <FlightMap fixes={computed.fixes} baseMap={baseMap} watchKey={`${id}-${baseMap}`} followEnabled={followEnabled} />
+                <FlightMap
+                  fixesFull={computed.fixesFull}
+                  fixesLite={computed.fixesLite}
+                  baseMap={baseMap}
+                  watchKey={`${id}-${baseMap}`}
+                  followEnabled={followEnabled}
+                />
               </Box>
             </Box>
           </Box>

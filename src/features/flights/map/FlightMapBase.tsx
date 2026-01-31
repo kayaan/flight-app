@@ -1,6 +1,7 @@
 // src/features/flights/map/FlightMapBase.tsx
 // Standalone Map component (hover marker updates imperatively via zustand subscribe)
-// ✅ Fixes UI jank: no React re-render on hover; no Popup; lightweight circleMarker
+// ✅ Fixes UI jank: no React re-render on hover; lightweight circleMarker
+// ✅ Window dragging: render Lite during slider drag, Full (colored chunks) after release
 
 import * as React from "react";
 import { MapContainer, TileLayer, Polyline, useMap, useMapEvents } from "react-leaflet";
@@ -148,6 +149,13 @@ function upperBoundTSec(fixes: FixPoint[], tSec: number) {
     return Math.max(0, lo - 1);
 }
 
+function computeBounds(points: LatLngTuple[]): LatLngBoundsExpression | null {
+    if (points.length < 2) return null;
+    return points as unknown as LatLngBoundsExpression;
+}
+
+// ---- Color-chunk logic (restored) ----
+
 function colorForVario(v: number) {
     const a = Math.abs(v);
     const level = a < 2 ? 1 : a < 3 ? 2 : 3;
@@ -199,11 +207,6 @@ function buildChunksFromFixesWindow(fixes: FixPoint[], startIdx: number, endIdx:
 
     if (cur && cur.length >= 2) chunks.push({ color: lastColor, positions: cur });
     return chunks;
-}
-
-function computeBounds(points: LatLngTuple[]): LatLngBoundsExpression | null {
-    if (points.length < 2) return null;
-    return points as unknown as LatLngBoundsExpression;
 }
 
 /**
@@ -331,15 +334,17 @@ function HoverMarker({
 export function FlightMap({
     baseMap = "osm",
     watchKey,
-    fixes,
+    fixesFull,
+    fixesLite,
     followEnabled = true,
 }: {
     baseMap?: BaseMap;
     watchKey?: unknown;
-    fixes: FixPoint[];
+    fixesFull: FixPoint[];
+    fixesLite: FixPoint[];
     followEnabled: boolean;
 }) {
-    const hasTrack = fixes.length >= 2;
+    const hasTrack = fixesFull.length >= 2;
     const initialZoom = hasTrack ? 13 : 11;
 
     const setWindow = useTimeWindowStore((s) => s.setWindowThrottled);
@@ -347,19 +352,19 @@ export function FlightMap({
     const [zoom, setZoom] = React.useState<number>(initialZoom);
     React.useEffect(() => setZoom(initialZoom), [initialZoom]);
 
+    // Meta/geometry always from FULL to prevent "jump"
+    const totalSeconds = fixesFull.length ? fixesFull[fixesFull.length - 1].tSec : 0;
+
     const fullPoints = React.useMemo(() => {
-        const out = new Array<LatLngTuple>(fixes.length);
-        for (let i = 0; i < fixes.length; i++) out[i] = [fixes[i].lat, fixes[i].lon];
+        const out = new Array<LatLngTuple>(fixesFull.length);
+        for (let i = 0; i < fixesFull.length; i++) out[i] = [fixesFull[i].lat, fixesFull[i].lon];
         return out;
-    }, [fixes]);
+    }, [fixesFull]);
 
-    const totalSeconds = fixes.length ? fixes[fixes.length - 1].tSec : 0;
-
-    // ✅ Slider values are SECONDS (precise), UI label shows %
+    // Slider values are seconds; UI label shows %
     const [immediateValue, setImmediateValue] = React.useState<[number, number]>([0, 0]);
     const rangeSec = useThrottledValue<[number, number]>(immediateValue, 150);
 
-    // ✅ reset when flight/duration changes
     React.useEffect(() => {
         setImmediateValue([0, totalSeconds]);
     }, [totalSeconds]);
@@ -376,20 +381,69 @@ export function FlightMap({
     }, [rangeSec, totalSeconds]);
 
     React.useEffect(() => {
-        setWindow({ startSec, endSec, totalSec: totalSeconds })
-    }, [setWindow, startSec, endSec, totalSeconds])
+        setWindow({ startSec, endSec, totalSec: totalSeconds });
+    }, [setWindow, startSec, endSec, totalSeconds]);
+
+    // Local drag detection
+    const [isWindowDragging, setIsWindowDragging] = React.useState(false);
+
+    const onSliderPointerDown = React.useCallback((e: React.PointerEvent) => {
+        setIsWindowDragging(true);
+        try {
+            (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
+        } catch {
+            // ignore
+        }
+    }, []);
+
+    const endDragging = React.useCallback((e?: React.PointerEvent) => {
+        setIsWindowDragging(false);
+        if (e) {
+            try {
+                (e.currentTarget as HTMLDivElement).releasePointerCapture(e.pointerId);
+            } catch {
+                // ignore
+            }
+        }
+    }, []);
+
+    // For window indices:
+    // - In FULL mode (not dragging): we want accurate indices -> compute on fixesFull
+    // - In DRAG mode: compute on fixesLite (preview)
+    const windowFixes = isWindowDragging ? fixesLite : fixesFull;
 
     const { startIdx, endIdx } = React.useMemo(() => {
-        if (fixes.length < 2) return { startIdx: 0, endIdx: 0 };
-        const s = clamp(lowerBoundTSec(fixes, startSec), 0, fixes.length - 2);
-        const e = clamp(upperBoundTSec(fixes, endSec), s + 1, fixes.length - 1);
-        return { startIdx: s, endIdx: e };
-    }, [fixes, startSec, endSec]);
+        if (windowFixes.length < 2) return { startIdx: 0, endIdx: 0 };
 
+        const eps = 0.0001;
+        let s = startSec;
+        let e = endSec;
+        if (Math.abs(e - s) < eps) {
+            s = 0;
+            e = totalSeconds;
+        }
+
+        const si = clamp(lowerBoundTSec(windowFixes, s), 0, windowFixes.length - 2);
+        const ei = clamp(upperBoundTSec(windowFixes, e), si + 1, windowFixes.length - 1);
+        return { startIdx: si, endIdx: ei };
+    }, [windowFixes, startSec, endSec, totalSeconds]);
+
+    // LOD preview line (only used during dragging)
+    const liteWindowPoints = React.useMemo(() => {
+        if (!isWindowDragging) return [];
+        if (fixesLite.length < 2) return [];
+        const slice = fixesLite.slice(startIdx, endIdx + 1);
+        const out = new Array<LatLngTuple>(slice.length);
+        for (let i = 0; i < slice.length; i++) out[i] = [slice[i].lat, slice[i].lon];
+        return out;
+    }, [isWindowDragging, fixesLite, startIdx, endIdx]);
+
+    // Colored chunks (only in FULL mode, and computed on FULL fixes for correct coloring)
     const colorChunks = React.useMemo(() => {
-        if (!hasTrack) return [];
-        return buildChunksFromFixesWindow(fixes, startIdx, endIdx);
-    }, [hasTrack, fixes, startIdx, endIdx]);
+        if (isWindowDragging) return [];
+        if (fixesFull.length < 2) return [];
+        return buildChunksFromFixesWindow(fixesFull, startIdx, endIdx);
+    }, [isWindowDragging, fixesFull, startIdx, endIdx]);
 
     const center: LatLngTuple = fullPoints.length ? fullPoints[0] : [48.1372, 11.5756];
     const bounds = React.useMemo(() => computeBounds(fullPoints), [fullPoints]);
@@ -412,16 +466,23 @@ export function FlightMap({
                 </Text>
             </Group>
 
-            <RangeSlider
-                value={immediateValue}
-                onChange={(v) => setImmediateValue([Math.min(v[0], v[1]), Math.max(v[0], v[1])])}
-                min={0}
-                max={totalSeconds}
-                step={1}
-                minRange={1}
-                mb="sm"
-                label={(v) => `${pct(v, totalSeconds)}%`}
-            />
+            <Box
+                onPointerDown={onSliderPointerDown}
+                onPointerUp={endDragging}
+                onPointerCancel={endDragging}
+                style={{ touchAction: "none" }}
+            >
+                <RangeSlider
+                    value={immediateValue}
+                    onChange={(v) => setImmediateValue([Math.min(v[0], v[1]), Math.max(v[0], v[1])])}
+                    min={0}
+                    max={totalSeconds}
+                    step={1}
+                    minRange={1}
+                    mb="sm"
+                    label={(v) => `${pct(v, totalSeconds)}%`}
+                />
+            </Box>
 
             <Box style={{ flex: 1, minHeight: 0 }}>
                 <MapContainer
@@ -432,7 +493,7 @@ export function FlightMap({
                 >
                     <TileLayer key={tile.key} url={tile.url} attribution={tile.attribution} />
 
-                    {/* Base (faint) track */}
+                    {/* Base (faint) full track always (cheap single polyline) */}
                     {fullPoints.length >= 2 && (
                         <Polyline
                             positions={fullPoints}
@@ -446,36 +507,53 @@ export function FlightMap({
                         />
                     )}
 
-                    {/* ✅ Hover marker (imperative, no React re-render on hover) */}
-                    <HoverMarker fixes={fixes} followEnabled={followEnabled} />
+                    {/* DRAG MODE: show lite window polyline (no chunks) */}
+                    {isWindowDragging && liteWindowPoints.length >= 2 && (
+                        <Polyline
+                            positions={liteWindowPoints}
+                            pathOptions={{
+                                color: "rgba(18, 230, 106, 0.95)",
+                                weight: Math.max(2.6, line * 1.15),
+                                opacity: 1,
+                                lineCap: "round",
+                                lineJoin: "round",
+                            }}
+                        />
+                    )}
 
-                    {/* Colored chunks: outline + main line */}
-                    {colorChunks.map((ch, i) => (
-                        <Polyline
-                            key={`o-${i}`}
-                            positions={ch.positions}
-                            pathOptions={{
-                                color: OUTLINE,
-                                weight: outlineWeight,
-                                opacity: outlineOpacity,
-                                lineCap: "round",
-                                lineJoin: "round",
-                            }}
-                        />
-                    ))}
-                    {colorChunks.map((ch, i) => (
-                        <Polyline
-                            key={`c-${i}`}
-                            positions={ch.positions}
-                            pathOptions={{
-                                color: ch.color,
-                                weight: line,
-                                opacity: 0.98,
-                                lineCap: "round",
-                                lineJoin: "round",
-                            }}
-                        />
-                    ))}
+                    {/* FULL MODE: colored chunks (outline + main line) */}
+                    {!isWindowDragging &&
+                        colorChunks.map((ch, i) => (
+                            <Polyline
+                                key={`o-${i}`}
+                                positions={ch.positions}
+                                pathOptions={{
+                                    color: OUTLINE,
+                                    weight: outlineWeight,
+                                    opacity: outlineOpacity,
+                                    lineCap: "round",
+                                    lineJoin: "round",
+                                }}
+                            />
+                        ))}
+
+                    {!isWindowDragging &&
+                        colorChunks.map((ch, i) => (
+                            <Polyline
+                                key={`c-${i}`}
+                                positions={ch.positions}
+                                pathOptions={{
+                                    color: ch.color,
+                                    weight: line,
+                                    opacity: 0.98,
+                                    lineCap: "round",
+                                    lineJoin: "round",
+                                }}
+                            />
+                        ))}
+
+                    {/* Hover marker always precise (full fixes) */}
+                    <HoverMarker fixes={fixesFull} followEnabled={followEnabled} />
 
                     <ZoomWatcher onZoom={setZoom} />
                     <MapAutoResize watchKey={watchKey} />
