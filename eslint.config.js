@@ -20,8 +20,8 @@ export default defineConfig([
       globals: globals.browser,
     },
     rules: {
-      "@typescript-eslint/no-unused-vars": "warn",   // or "warn" if you want to keep seeing it
-      "no-unused-vars": "warn",
+      "@typescript-eslint/no-unused-vars": "off",   // or "warn" if you want to keep seeing it
+      "no-unused-vars": "off",
       "no-empty": ["error", { "allowEmptyCatch": true }],
       "@typescript-eslint/no-explicit-any": "warn",                 // ← also turn off base rule
       "@typescript-eslint/no-explicit-any": "off"

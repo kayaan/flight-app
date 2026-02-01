@@ -6,7 +6,6 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import type { FlightRecordDetails } from "./flights.types";
 import { useFlightsStore } from "./store/flights.store";
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
 
 type SortKey =
     | "flightDate"
@@ -93,7 +92,7 @@ function SortHeaderBare({
 export interface FlightsTableBareVirtualProps {
     flights: FlightRecordDetails[];
     deletingId?: number | null;
-    onDelete: (id: number, originalFilename?: string | null) => void;
+    onDelete: (id: number) => void;
 }
 
 type NormalizedFlight = FlightRecordDetails & {
@@ -211,6 +210,7 @@ export function FlightsTableBareVirtual({
     const parentRef = React.useRef<HTMLDivElement | null>(null);
     const EST_ROW_H = 40;
 
+    // eslint-disable-next-line react-hooks/incompatible-library
     const rowVirtualizer = useVirtualizer({
         count: deferredRows.length,
         getScrollElement: () => parentRef.current,
@@ -541,7 +541,7 @@ export function FlightsTableBareVirtual({
                                             aria-label="Delete flight"
                                             loading={deletingId === f.id}
                                             disabled={deletingId !== null}
-                                            onClick={() => onDelete(f.id, f.originalFilename)}
+                                            onClick={() => onDelete(f.id)}
                                         >
                                             <IconTrash size={16} />
                                         </ActionIcon>

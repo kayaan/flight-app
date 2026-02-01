@@ -6,29 +6,32 @@ export type TimeWindow = { startSec: number; endSec: number; totalSec: number };
 
 type TimeWindowState = {
     window: TimeWindow | null;
-    // Sofortiger Update (für UI/Slider-Zahlen)
-    setWindow: (w: TimeWindow | null) => void;
-    // Gedrosselter Update (für teure Berechnungen/ECharts)
-    setWindowThrottled: (w: TimeWindow | null) => void;
+    // Namen weglassen, nur Typen zählen
+    setWindow: (window: TimeWindow | null) => void;
+    setWindowThrottled: (window: TimeWindow | null) => void;
+
+    isDragging: boolean;
+    setDragging: (v: boolean) => void;
 };
 
 export const useTimeWindowStore = create<TimeWindowState>((set) => {
-    // 1. Erstelle die gedrosselte Funktion (alle 200ms)
     const throttledSet = throttle(
         (w: TimeWindow | null) => {
             set({ window: w });
         },
         100,
-        { leading: true, trailing: true } // Wichtig für sofortigen Start & finalen Wert
+        { leading: true, trailing: true }
     );
 
     return {
         window: null,
 
-        // Normaler Setter (falls benötigt)
-        setWindow: (w) => set({ window: w }),
+        // Direkte Zuweisung ohne redundante (w) => ... Funktion
+        setWindow: (window) => set({ window }),
+        setWindowThrottled: throttledSet,
 
-        // 2. Diese Methode rufst du im Slider 'onChange' auf
-        setWindowThrottled: (w) => throttledSet(w),
+        isDragging: false,
+
+        setDragging: (v) => set({ isDragging: v })
     };
 });

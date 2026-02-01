@@ -535,10 +535,10 @@ function fmtSigned(n: number, digits = 0) {
   return `${s}${n.toFixed(digits)}`;
 }
 
-
-
-
 export function FlightDetailsRoute() {
+
+
+
   const token = useAuthStore((s) => s.token);
   const { id } = useParams({ from: "/flights/$id" });
 
@@ -560,6 +560,9 @@ export function FlightDetailsRoute() {
       return true;
     }
   });
+
+
+
 
   React.useEffect(() => {
     try {
@@ -840,8 +843,42 @@ export function FlightDetailsRoute() {
     return `<strong>${Math.round(h)} m</strong>`;
   };
 
+
+  function readZoomRangeSec(e: any, maxT: number): { startSec: number; endSec: number } | null {
+    if (!Number.isFinite(maxT) || maxT <= 0) return null;
+
+    // 1) bevorzugt startValue/endValue (direkt auf x-Achse)
+    const sv = e?.startValue;
+    const ev = e?.endValue;
+
+    if (typeof sv === "number" && typeof ev === "number" && Number.isFinite(sv) && Number.isFinite(ev)) {
+      return { startSec: sv, endSec: ev };
+    }
+
+    // 2) fallback: Prozentwerte (0..100)
+    const sp = e?.start;
+    const ep = e?.end;
+
+    if (typeof sp === "number" && typeof ep === "number" && Number.isFinite(sp) && Number.isFinite(ep)) {
+      const startSec = (sp / 100) * maxT;
+      const endSec = (ep / 100) * maxT;
+      return { startSec, endSec };
+    }
+
+    return null;
+  }
+
   // Time window from store (throttled updates)
   const win = useTimeWindowStore((s) => s.window);
+  // ✅ Time window writers
+  const setWindow = useTimeWindowStore((s) => s.setWindow);
+  const setWindowThrottled = useTimeWindowStore((s) => s.setWindowThrottled);
+
+  // ✅ Loop guard: wenn wir programmatically zoomen (Zoom-to-window Button), dann dataZoom-Events ignorieren
+  const zoomApplyingRef = React.useRef(false);
+  // ✅ Letzten Zoom-Messwert merken für Commit (mouseup)
+  const lastZoomRef = React.useRef<{ startSec: number; endSec: number; totalSec: number } | null>(null);
+
   const startSec = win?.startSec ?? 0;
   const endSec = win?.endSec ?? 0;
   const totalSec = win?.totalSec ?? (chartData?.maxT ?? 0);
