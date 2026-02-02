@@ -3,7 +3,6 @@ import { create } from "zustand";
 import { throttle } from "lodash";
 
 export type TimeWindow = { startSec: number; endSec: number; totalSec: number };
-export type IndexRange = { from: number; to: number };
 
 type TimeWindowState = {
     window: TimeWindow | null;
@@ -31,10 +30,8 @@ export const useTimeWindowStore = create<TimeWindowState>((set) => {
         setWindow: (window) => set({ window }),
         setWindowThrottled: throttledSet,
 
-        ran
-
-
         isDragging: false,
+
         setDragging: (v) => set({ isDragging: v })
     };
 });

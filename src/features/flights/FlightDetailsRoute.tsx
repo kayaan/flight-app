@@ -1328,8 +1328,6 @@ export function FlightDetailsRoute() {
   // -----------------------
   // ZRender Debug + (optional) Range-Select
   // -----------------------
-  const zrAttachedRef = React.useRef(false);
-
   const dragRef = React.useRef<{
     dragging: boolean;     // are we currently dragging?
     startT: number | null; // tSec at mousedown
@@ -1605,25 +1603,10 @@ export function FlightDetailsRoute() {
       // Step 3 cleanup kommt später: preview löschen
     };
 
-    const onWindowUp = () => {
-      if (!dragRef.current.dragging) return;
-
-      // Drag ist aktiv, aber MouseUp ist außerhalb vom Canvas passiert
-      dragRef.current.dragging = false;
-
-      console.log("[ZR] window mouseup: end drag at t=", dragRef.current.lastT);
-
-      // Step 4/5 kommt später: commit oder cancel
-    };
-
-
     zr.on("mousedown", onDown);
     zr.on("mousemove", onMove);
     zr.on("mouseup", onUp);
     zr.on("globalout", onMouseOut);
-
-
-
 
     return () => {
       console.log("[ZR] detaching handlers 🧹");
