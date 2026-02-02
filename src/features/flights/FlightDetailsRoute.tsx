@@ -95,11 +95,13 @@ const ALT_AXIS_POINTER = {
 const ALT_GRID = { left: 56, right: 16, top: 24, bottom: 40 } as const;
 
 const ALT_DATAZOOM = [
-  { type: "inside", xAxisIndex: 0 },
+  { id: "dz_inside_alt", type: "inside", xAxisIndex: 0, moveOnMouseMove: true },
   { type: "slider", xAxisIndex: 0, height: 20, bottom: 8 },
 ] as const;
 
-const INSIDE_ZOOM = [{ type: "inside", xAxisIndex: 0 }] as const;
+
+const INSIDE_ZOOM = [{ id: "dz_inside_other", type: "inside", xAxisIndex: 0, moveOnMouseMove: true }] as const;
+
 
 function clamp(n: number, min: number, max: number) {
   return Math.min(max, Math.max(min, n));
@@ -845,16 +847,19 @@ export function FlightDetailsRoute() {
 
   // Time window from store (throttled updates)
   const win = useTimeWindowStore((s) => s.window);
-
+  const setWindow = useTimeWindowStore((s) => s.setWindow);
+  const setDragging = useTimeWindowStore((s) => s.setDragging);
 
   const startSec = win?.startSec ?? 0;
   const endSec = win?.endSec ?? 0;
   const totalSec = win?.totalSec ?? (chartData?.maxT ?? 0);
 
-  const windowMarkLine = React.useMemo(
-    () => buildWindowMarkLine(startSec, endSec, totalSec),
-    [startSec, endSec, totalSec]
-  );
+  const windowMarkLine = React.useMemo(() => {
+    // ✅ No selection -> no committed lines at all
+    if (!win) return undefined;
+    return buildWindowMarkLine(startSec, endSec, totalSec);
+  }, [win, startSec, endSec, totalSec]);
+
 
   const segmentStats = React.useMemo(() => {
     if (!computed?.series || !chartData?.vSpeed) return null;
@@ -902,6 +907,34 @@ export function FlightDetailsRoute() {
           data: [],
           silent: true,
           markLine: windowMarkLine,
+        },
+
+        {
+          id: "__preview",
+          name: "__preview",
+          type: "line",
+          data: [],
+          silent: true, // do NOT capture interactions
+          markLine: {
+            // Start with nothing shown. We'll fill `data` during drag.
+            data: [],
+
+            // No arrow heads / symbols at the ends (we want pure vertical lines)
+            symbol: "none",
+
+            // No labels on the lines (keeps the chart clean)
+            label: { show: false },
+
+            // Slightly different style than the committed window:
+            // same green hue, but more transparent + thinner => clearly "preview"
+            lineStyle: {
+              color: "rgba(46, 18, 230, 0.75)",
+              width: 2,
+              type: "dashed",
+              shadowBlur: 6,
+              shadowColor: "rgba(18, 230, 106, 0.9)",
+            },
+          },
         },
       ],
     };
@@ -1271,6 +1304,335 @@ export function FlightDetailsRoute() {
     s.dispatchAction?.({ type: "dataZoom", dataZoomIndex: 0, startValue: zs, endValue: ze });
   }, [chartData?.maxT, totalSec, startSec, endSec]);
 
+  // ✅ Reset selection: clears committed window and also cancels any active drag state.
+  const resetSelection = React.useCallback(() => {
+    // Clear committed selection window (stats disappear, committed markLines disappear)
+    setWindow(null);
+
+    // If a drag is currently active, end it (store flag)
+    setDragging(false);
+
+    // Also reset local drag ref state (so we don't accidentally commit later)
+    dragRef.current.dragging = false;
+    dragRef.current.startT = null;
+    dragRef.current.lastT = null;
+
+    // NOTE: preview lines are cleared in the ZR handler via clearPreview(),
+    // but from here (outside the ZR effect) we cannot call clearPreview() directly.
+    // That's OK because preview is already cleared on mouseup.
+    //
+    // If you ever want "reset" to immediately clear preview even mid-drag,
+    // we can add a tiny bridge ref (e.g. clearPreviewRef.current = () => ...).
+  }, [setWindow, setDragging]);
+
+  // -----------------------
+  // ZRender Debug + (optional) Range-Select
+  // -----------------------
+  const zrAttachedRef = React.useRef(false);
+
+  const dragRef = React.useRef<{
+    dragging: boolean;     // are we currently dragging?
+    startT: number | null; // tSec at mousedown
+    lastT: number | null;  // last valid tSec during drag (mousemove)
+  }>({ dragging: false, startT: null, lastT: null });
+
+  React.useEffect(() => {
+    if (!showAlt) return;
+
+    const inst = altInstRef.current;
+    if (!inst) {
+      console.log("[ZR] no altInstRef yet (wait for chartReadyTick)", { chartsReadyTick });
+      return;
+    }
+
+    const zr = inst.getZr?.();
+    if (!zr) {
+      console.warn("[ZR] getZr() missing on inst", inst);
+      return;
+    }
+
+
+    // remembers whether we disabled pan so we can restore it reliably
+    const panDisabledRef = { current: false };
+
+    const disablePanWhileSelecting = () => {
+      if (panDisabledRef.current) return;
+      panDisabledRef.current = true;
+
+      // ✅ disable pan on inside zoom while selecting
+      inst.setOption(
+        {
+          dataZoom: [
+            { id: "dz_inside_alt", moveOnMouseMove: false },
+          ],
+        },
+        { silent: true }
+      );
+    };
+
+    const restorePanAfterSelecting = () => {
+      if (!panDisabledRef.current) return;
+      panDisabledRef.current = false;
+
+      // ✅ restore default pan behavior
+      inst.setOption(
+        {
+          dataZoom: [
+            { id: "dz_inside_alt", moveOnMouseMove: true },
+          ],
+        },
+        { silent: true }
+      );
+    };
+
+
+    const isSelectGesture = (ev: any) => {
+      // Shift gedrückt => Range-Select
+      const e = ev?.event ?? ev;
+      return !!e?.shiftKey;
+    };
+
+    const stopEvent = (ev: any) => {
+      const e = ev?.event ?? ev;
+      // verhindert ECharts dataZoom drag/pan
+      e?.preventDefault?.();
+      e?.stopPropagation?.();
+    };
+
+    console.log("[ZR] attaching handlers ✅", { chartsReadyTick });
+
+    const getXY = (ev: any) => {
+      const ox = ev?.offsetX;
+      const oy = ev?.offsetY;
+      if (typeof ox === "number" && typeof oy === "number") return { x: ox, y: oy };
+
+      const ne = ev?.event;
+      const x2 = ne?.offsetX;
+      const y2 = ne?.offsetY;
+      if (typeof x2 === "number" && typeof y2 === "number") return { x: x2, y: y2 };
+
+      return null;
+    };
+
+    const pxToT = (x: number, y: number) => {
+      try {
+        const v = inst.convertFromPixel({ gridIndex: 0 }, [x, y]);
+        const t = Array.isArray(v) ? v[0] : v;
+        return typeof t === "number" && Number.isFinite(t) ? t : null;
+      } catch {
+        return null;
+      }
+    };
+
+    // Draw/Update the preview lines in the ALT chart.
+    // We update ONLY the "__preview" series by id, so the rest of the option stays untouched.
+    const setPreviewLines = (a: number, b: number) => {
+      // Normalize (a <= b)
+      const x1 = Math.min(a, b);
+      const x2 = Math.max(a, b);
+
+      try {
+        inst.setOption(
+          {
+            series: [
+              {
+                id: "__preview",
+                markLine: {
+                  data: [{ xAxis: x1 }, { xAxis: x2 }],
+                },
+              },
+            ],
+          },
+          {
+            silent: true,
+          }
+        );
+      } catch (e) {
+        console.warn("[ZR] setPreviewLines failed", e);
+      }
+    };
+
+    const clearPreview = () => {
+      try {
+        inst.setOption(
+          {
+            series: [
+              {
+                id: "__preview",
+                markLine: { data: [] },
+              },
+            ],
+          },
+          { silent: true }
+        );
+      } catch {
+        // ignore
+      }
+    };
+
+    // ----------------------------
+    // ZR Handlers (Step 2)
+    // ----------------------------
+
+    const onDown = (ev: any) => {
+      // ✅ Ohne Shift: ECharts darf normal pannen/zoomen
+      if (!isSelectGesture(ev)) return;
+
+      // ✅ Mit Shift: ECharts Pan/Drag sofort unterdrücken (wichtig!)
+      stopEvent(ev);
+      disablePanWhileSelecting();
+
+      const xy = getXY(ev);
+      if (!xy) return;
+
+      const t = pxToT(xy.x, xy.y);
+      if (t == null) return;
+
+      dragRef.current.dragging = true;
+      dragRef.current.startT = t;
+      dragRef.current.lastT = t;
+
+      setDragging(true);
+
+      // preview init
+      setPreviewLines(t, t);
+    };
+
+    const onMove = (ev: any) => {
+      if (!dragRef.current.dragging) return;
+
+      // ✅ solange selection aktiv ist, ECharts Pan blocken
+      stopEvent(ev);
+      disablePanWhileSelecting();
+
+      const xy = getXY(ev);
+      if (!xy) return;
+
+      const t = pxToT(xy.x, xy.y);
+      if (t == null) return;
+
+      dragRef.current.lastT = t;
+
+      const s0 = dragRef.current.startT;
+      const s1 = dragRef.current.lastT;
+      if (s0 != null && s1 != null) setPreviewLines(s0, s1);
+    };
+
+
+    const onUp = (ev: any) => {
+      if (!dragRef.current.dragging) return;
+
+      stopEvent(ev);
+
+      const xy = getXY(ev);
+      const t = xy ? pxToT(xy.x, xy.y) : null;
+
+      // Use t if available, otherwise keep the last known t
+      if (t != null) dragRef.current.lastT = t;
+
+      // End dragging (local)
+      dragRef.current.dragging = false;
+
+      // End dragging (store flag)
+      setDragging(false);
+
+      const startT = dragRef.current.startT;
+      const lastT = dragRef.current.lastT;
+
+      restorePanAfterSelecting();
+
+      if (startT == null || lastT == null) {
+        // Nothing meaningful selected -> just clear preview
+        clearPreview();
+        dragRef.current.startT = null;
+        dragRef.current.lastT = null;
+        return;
+      }
+
+      // -----------------------------
+      // Step 4: Normalize + clamp
+      // -----------------------------
+      let a = Math.min(startT, lastT);
+      let b = Math.max(startT, lastT);
+
+      // totalSec: prefer chartData.maxT; fallback to existing totalSec
+      const maxT = chartData?.maxT ?? totalSec ?? 0;
+
+      if (Number.isFinite(maxT) && maxT > 0) {
+        a = clamp(a, 0, maxT);
+        b = clamp(b, 0, maxT);
+      }
+
+      // Ignore tiny selections (prevents accidental clicks setting a near-zero window)
+      const MIN_RANGE_SEC = 1.0;
+      if (b - a < MIN_RANGE_SEC) {
+        clearPreview();
+        dragRef.current.startT = null;
+        dragRef.current.lastT = null;
+        return;
+      }
+
+      // -----------------------------
+      // Step 5: Commit to store
+      // -----------------------------
+      setWindow({
+        startSec: a,
+        endSec: b,
+        totalSec: Number.isFinite(maxT) && maxT > 0 ? maxT : b,
+      });
+
+      // After commit, we remove preview lines.
+      // The committed lines are rendered via "__window" (windowMarkLine from store).
+      clearPreview();
+
+      // Reset transient drag state
+      dragRef.current.startT = null;
+      dragRef.current.lastT = null;
+    };
+
+
+
+
+    const onMouseOut = () => {
+      // optional: nur canceln, wenn gerade dragging
+      if (!dragRef.current.dragging) return;
+
+      console.log("[ZR] mouseout: cancel drag");
+      dragRef.current.dragging = false;
+      dragRef.current.startT = null;
+      dragRef.current.lastT = null;
+
+      // Step 3 cleanup kommt später: preview löschen
+    };
+
+    const onWindowUp = () => {
+      if (!dragRef.current.dragging) return;
+
+      // Drag ist aktiv, aber MouseUp ist außerhalb vom Canvas passiert
+      dragRef.current.dragging = false;
+
+      console.log("[ZR] window mouseup: end drag at t=", dragRef.current.lastT);
+
+      // Step 4/5 kommt später: commit oder cancel
+    };
+
+
+    zr.on("mousedown", onDown);
+    zr.on("mousemove", onMove);
+    zr.on("mouseup", onUp);
+    zr.on("globalout", onMouseOut);
+
+
+
+
+    return () => {
+      console.log("[ZR] detaching handlers 🧹");
+      zr.off("mousedown", onDown);
+      zr.off("mousemove", onMove);
+      zr.off("mouseup", onUp);
+      zr.off("globalout", onMouseOut);
+    };
+  }, [showAlt, chartsReadyTick, chartData?.maxT, totalSec, setWindow, setDragging]);
 
 
 
@@ -1284,6 +1646,15 @@ export function FlightDetailsRoute() {
           </Button>
 
           <Group gap="md" align="center">
+            <Button
+              size="xs"
+              variant="light"
+              onClick={resetSelection}
+              disabled={!win} // only enabled if a selection exists
+            >
+              Reset selection
+            </Button>
+
             <Checkbox
               label="Topo"
               checked={baseMap === "topo"}
@@ -1392,8 +1763,9 @@ export function FlightDetailsRoute() {
                       echarts={echarts}
                       option={altOption}
                       style={{ height: "100%", width: "100%" }}
-                      notMerge
+                      notMerge={false}
                       onChartReady={(inst) => {
+                        console.log("[ALT] onChartReady", inst);
                         altInstRef.current = inst;
                         inst.group = chartGroupId;
                         setChartsReadyTick((x) => x + 1);
@@ -1413,7 +1785,7 @@ export function FlightDetailsRoute() {
                       echarts={echarts}
                       option={varioOption}
                       style={{ height: "100%", width: "100%" }}
-                      notMerge
+                      notMerge={false}
                       onChartReady={(inst) => {
                         varioInstRef.current = inst;
                         inst.group = chartGroupId;
@@ -1434,7 +1806,7 @@ export function FlightDetailsRoute() {
                       echarts={echarts}
                       option={speedOption}
                       style={{ height: "100%", width: "100%" }}
-                      notMerge
+                      notMerge={false}
                       onChartReady={(inst) => {
                         speedInstRef.current = inst;
                         inst.group = chartGroupId;
