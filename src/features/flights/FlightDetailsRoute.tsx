@@ -69,7 +69,7 @@ function buildWindowMarkLine(startSec: number, endSec: number, totalSec: number)
     symbol: "none",
     label: { show: false },
     lineStyle: {
-      color: "rgba(18, 230, 106, 0.9)", // grün
+      color: "rgba(18, 230, 106, 0.9)",
       width: 2,
       type: "dashed",
       dashOffset: 0,
@@ -96,12 +96,11 @@ const ALT_GRID = { left: 56, right: 16, top: 24, bottom: 40 } as const;
 
 const ALT_DATAZOOM = [
   { id: "dz_inside_alt", type: "inside", xAxisIndex: 0, moveOnMouseMove: true },
-  { type: "slider", xAxisIndex: 0, height: 20, bottom: 8 },
+  { id: "dz_slider_alt", type: "slider", xAxisIndex: 0, height: 20, bottom: 8 },
 ] as const;
 
-
-const INSIDE_ZOOM = [{ id: "dz_inside_other", type: "inside", xAxisIndex: 0, moveOnMouseMove: true }] as const;
-
+const VARIO_DATAZOOM = [{ id: "dz_inside_vario", type: "inside", xAxisIndex: 0, moveOnMouseMove: true }] as const;
+const SPEED_DATAZOOM = [{ id: "dz_inside_speed", type: "inside", xAxisIndex: 0, moveOnMouseMove: true }] as const;
 
 function clamp(n: number, min: number, max: number) {
   return Math.min(max, Math.max(min, n));
@@ -116,18 +115,11 @@ function fmtTime(sec: number) {
   return `${mm}:${String(ss).padStart(2, "0")}`;
 }
 
-/**
- * Vario "wie echtes Vario": Steigrate über ein zeitbasiertes Fenster (Sekunden),
- * als trailing-window: v(t) = (alt(t) - alt(t - win)) / (t - (t - win)).
- *
- * Liefert [tSec, vMs] für jeden SeriesPoint.
- */
 function calculateVarioFromSeries(points: SeriesPoint[], windowSec: number): [number, number][] {
   const n = points.length;
   if (!n) return [];
   const w = Math.max(0.25, windowSec);
 
-  // binary search: largest index j with points[j].tSec <= target (j <= hi)
   function idxAtOrBefore(target: number, hi: number) {
     let lo = 0;
     let h = hi;
@@ -144,41 +136,32 @@ function calculateVarioFromSeries(points: SeriesPoint[], windowSec: number): [nu
   for (let i = 0; i < n; i++) {
     const t = points[i].tSec;
 
-    // ✅ Warm-up: bevor das volle Fenster verfügbar ist, kein Peak erzeugen
     if (t < w) {
       res[i] = [t, 0];
       continue;
     }
 
     const target = t - w;
-    const j = idxAtOrBefore(target, i); // j <= i
+    const j = idxAtOrBefore(target, i);
     const a = points[j];
     const b = points[i];
 
     const dt = b.tSec - a.tSec;
     let v = 0;
 
-    // dt sollte hier i.d.R. ~w sein; wenn nicht, trotzdem sicher bleiben
     if (dt > 0.0001) v = (b.altitudeM - a.altitudeM) / dt;
 
-    // optional: glitch clamp (sehr großzügig)
     v = clamp(v, -25, 25);
-
-    // NICHT runden für "Max", nur Anzeige/Tooltip runden
     res[i] = [t, v];
   }
 
   return res;
 }
 
-
 function calculateSmoothedSpeedFromSeries(points: SeriesPoint[], windowSec: number): [number, number][] {
   const n = points.length;
   if (!n) return [];
   const w = Math.max(0.25, windowSec);
-
-  // wir behandeln speed als "step function": speed_i gilt für [t_i, t_{i+1})
-  // dann ist Mittelwert = (Integral speed dt) / dt
 
   const t: number[] = new Array(n);
   const sp: number[] = new Array(n);
@@ -189,8 +172,6 @@ function calculateSmoothedSpeedFromSeries(points: SeriesPoint[], windowSec: numb
     sp[i] = typeof v === "number" && Number.isFinite(v) ? v : NaN;
   }
 
-  // prefix integral: A[k] = ∫ speed dt von t0 bis t_k (k index)
-  // wobei speed in Intervall i->i+1 = sp[i]
   const A: number[] = new Array(n).fill(0);
   let acc = 0;
   for (let i = 0; i < n - 1; i++) {
@@ -205,12 +186,10 @@ function calculateSmoothedSpeedFromSeries(points: SeriesPoint[], windowSec: numb
     return x < 0 ? 0 : x > 1 ? 1 : x;
   }
 
-  // Integral bis Zeit x (linear innerhalb des Segments)
   function areaAt(x: number): number {
     if (x <= t[0]) return 0;
     if (x >= t[n - 1]) return A[n - 1];
 
-    // find i with t[i] <= x < t[i+1]
     let lo = 0;
     let hi = n - 2;
     while (lo < hi) {
@@ -236,7 +215,6 @@ function calculateSmoothedSpeedFromSeries(points: SeriesPoint[], windowSec: numb
   for (let i = 0; i < n; i++) {
     const ti = t[i];
 
-    // warm-up: bevor volles Fenster da ist -> Rohwert nehmen (nicht 0 wie beim Vario)
     if (ti < w) {
       const raw = sp[i];
       out[i] = [ti, Number.isFinite(raw) ? raw : 0];
@@ -254,7 +232,6 @@ function calculateSmoothedSpeedFromSeries(points: SeriesPoint[], windowSec: numb
 
   return out;
 }
-
 
 function extractTSec(params: any): number | null {
   const v = params?.value ?? params?.data?.value ?? params?.data;
@@ -315,12 +292,6 @@ type SegmentStats = {
   longestClimbDAlt: number | null;
 };
 
-/**
- * Wichtig: vAvg/vMax/vMin werden aus DERSELBEN Vario-Reihe berechnet,
- * die auch im Chart gezeichnet wird (varioSeries).
- *
- * varioSeries muss 1:1 zu series passen (gleiche Indizes), als [tSec, vMs].
- */
 function computeSegmentStats(
   series: SeriesPoint[],
   varioSeries: [number, number][],
@@ -351,7 +322,6 @@ function computeSegmentStats(
 
   const maxT = series[series.length - 1].tSec;
 
-  // ✅ wenn noch kein Fenster gesetzt (start==end), nimm Full Flight
   let s = Math.max(0, Math.min(startSec, endSec));
   let e = Math.max(0, Math.max(startSec, endSec));
   if (Math.abs(e - s) < 0.0001) {
@@ -394,7 +364,6 @@ function computeSegmentStats(
   let altMin = Number.POSITIVE_INFINITY;
   let altMax = Number.NEGATIVE_INFINITY;
 
-  // --- Vario stats: EXAKT aus varioSeries im Zeitfenster ---
   let vSum = 0;
   let vCount = 0;
   let vMax = Number.NEGATIVE_INFINITY;
@@ -415,7 +384,6 @@ function computeSegmentStats(
   const vMaxOut = Number.isFinite(vMax) ? vMax : null;
   const vMinOut = Number.isFinite(vMin) ? vMin : null;
 
-  // Phase-Analyse (ebenfalls aus derselben Vario-Kurve, simpel)
   const CLIMB_TH = 0.5;
   const SINK_TH = -0.7;
   let climbTime = 0;
@@ -431,7 +399,7 @@ function computeSegmentStats(
     const dt = segEnd - segStart;
     if (dt <= 0) continue;
 
-    const v = varioSeries[i][1]; // “zugehörig” zum Zeitpunkt a.tSec, aber für Phase reicht’s stabil
+    const v = varioSeries[i][1];
     if (v > CLIMB_TH) climbTime += dt;
     else if (v < SINK_TH) sinkTime += dt;
     else glideTime += dt;
@@ -442,13 +410,11 @@ function computeSegmentStats(
   const pctSink = totalPhase > 0 ? (sinkTime / totalPhase) * 100 : null;
   const pctGlide = totalPhase > 0 ? (glideTime / totalPhase) * 100 : null;
 
-  // Alt min/max über Punkte
   for (let i = i0; i <= i1; i++) {
     altMin = Math.min(altMin, series[i].altitudeM);
     altMax = Math.max(altMax, series[i].altitudeM);
   }
 
-  // Speed stats (gewichtet)
   let speedSum = 0;
   let speedDtSum = 0;
   let speedMax = Number.NEGATIVE_INFINITY;
@@ -462,7 +428,8 @@ function computeSegmentStats(
     const dt = segEnd - segStart;
     if (dt <= 0) continue;
 
-    const sp = typeof a.gSpeedKmh === "number" && Number.isFinite(a.gSpeedKmh) ? a.gSpeedKmh : NaN;
+    const sp =
+      typeof a.gSpeedKmh === "number" && Number.isFinite(a.gSpeedKmh) ? a.gSpeedKmh : NaN;
     if (Number.isFinite(sp)) {
       speedSum += sp * dt;
       speedDtSum += dt;
@@ -472,7 +439,6 @@ function computeSegmentStats(
 
   const speedAvg = speedDtSum > 0 ? speedSum / speedDtSum : null;
 
-  // Longest climb block (einfach, stabil)
   let bestClimbT = 0;
   let bestClimbDAlt = 0;
   let curT = 0;
@@ -494,7 +460,7 @@ function computeSegmentStats(
     } else {
       if (curT > bestClimbT) {
         bestClimbT = curT;
-        bestClimbDAlt = curStartAlt == null ? 0 : (a.altitudeM - curStartAlt);
+        bestClimbDAlt = curStartAlt == null ? 0 : a.altitudeM - curStartAlt;
       }
       curT = 0;
       curStartAlt = null;
@@ -502,7 +468,7 @@ function computeSegmentStats(
   }
   if (curT > bestClimbT) {
     bestClimbT = curT;
-    bestClimbDAlt = curStartAlt == null ? 0 : (altEnd - curStartAlt);
+    bestClimbDAlt = curStartAlt == null ? 0 : altEnd - curStartAlt;
   }
 
   return {
@@ -531,16 +497,14 @@ function computeSegmentStats(
   };
 }
 
-
 function fmtSigned(n: number, digits = 0) {
   const s = n >= 0 ? "+" : "";
   return `${s}${n.toFixed(digits)}`;
 }
 
+type ChartKind = "alt" | "vario" | "speed";
+
 export function FlightDetailsRoute() {
-
-
-
   const token = useAuthStore((s) => s.token);
   const { id } = useParams({ from: "/flights/$id" });
 
@@ -552,7 +516,6 @@ export function FlightDetailsRoute() {
   const SHOW_VARIO_KEY = "flyapp.flightDetails.showChart.vario";
   const SHOW_SPEED_KEY = "flyapp.flightDetails.showChart.speed";
 
-
   const [followEnabled, setFollowEnabled] = React.useState<boolean>(() => {
     try {
       const raw = localStorage.getItem(FOLLOW_KEY);
@@ -563,21 +526,16 @@ export function FlightDetailsRoute() {
     }
   });
 
-
-
-
   React.useEffect(() => {
     try {
       localStorage.setItem(FOLLOW_KEY, followEnabled ? "1" : "0");
-    } catch {
-      // ignore
-    }
+    } catch { }
   }, [followEnabled]);
 
   const [showStats, setShowStats] = React.useState<boolean>(() => {
     try {
       const raw = localStorage.getItem(STATS_KEY);
-      if (raw == null) return true; // default ON
+      if (raw == null) return true;
       return raw === "1";
     } catch {
       return true;
@@ -587,12 +545,9 @@ export function FlightDetailsRoute() {
   React.useEffect(() => {
     try {
       localStorage.setItem(STATS_KEY, showStats ? "1" : "0");
-    } catch {
-      // ignore
-    }
+    } catch { }
   }, [showStats]);
 
-  // ✅ Vario-Fenster (Default 4s, änderbar + persisted)
   const [varioWindowSec, setVarioWindowSec] = React.useState<number>(() => {
     try {
       const raw = localStorage.getItem(VARIO_WIN_KEY);
@@ -607,9 +562,7 @@ export function FlightDetailsRoute() {
   React.useEffect(() => {
     try {
       localStorage.setItem(VARIO_WIN_KEY, String(varioWindowSec));
-    } catch {
-      // ignore
-    }
+    } catch { }
   }, [varioWindowSec]);
 
   const setHoverTSecThrottled = useFlightHoverStore((s) => s.setHoverTSecThrottled);
@@ -651,6 +604,12 @@ export function FlightDetailsRoute() {
   const containerRef = React.useRef<HTMLDivElement | null>(null);
   const draggingRef = React.useRef(false);
   const [splitPct, setSplitPct] = React.useState<number>(60);
+
+  const [chartReady, setChartReady] = React.useState({
+    alt: false,
+    vario: false,
+    speed: false,
+  });
 
   const stopDragging = React.useCallback(() => {
     draggingRef.current = false;
@@ -703,8 +662,6 @@ export function FlightDetailsRoute() {
       setFlight(null);
 
       try {
-        // if (!token) throw new Error("Not authenticated");
-
         const numericId = Number(id);
         if (!Number.isFinite(numericId)) throw new Error("Invalid flight id");
 
@@ -727,7 +684,6 @@ export function FlightDetailsRoute() {
     if (!flight?.igcContent || !flight.flightDate) return null;
     return parseIgcFixes(flight.igcContent, flight.flightDate);
   }, [flight]);
-
 
   const computed = React.useMemo(() => {
     if (!fixesFull) return null;
@@ -755,29 +711,25 @@ export function FlightDetailsRoute() {
       return;
     }
 
-    // UI kann sofort rendern → erstmal Full verwenden
     setFixesLite(full);
 
-    const RDP_MIN_POINTS = 1000;   // unterhalb kein RDP
-    const RDP_EPS_METERS = 20;    // 10–30m ist praxisnah für Paragliding
+    const RDP_MIN_POINTS = 1000;
+    const RDP_EPS_METERS = 20;
 
     if (full.length < RDP_MIN_POINTS) return;
 
     const jobId = ++rdpJobRef.current;
 
-    const worker = new Worker(
-      new URL("./map/rdp.worker.ts", import.meta.url),
-      { type: "module" }
-    );
+    const worker = new Worker(new URL("./map/rdp.worker.ts", import.meta.url), { type: "module" });
 
     worker.onmessage = (ev: MessageEvent<{ jobId: number; fixesLite: FixPoint[] }>) => {
-      if (ev.data?.jobId !== jobId) return; // altes Ergebnis ignorieren
+      if (ev.data?.jobId !== jobId) return;
       setFixesLite(ev.data.fixesLite);
       worker.terminate();
     };
 
     worker.onerror = () => {
-      worker.terminate(); // Fallback: wir bleiben bei Full
+      worker.terminate();
     };
 
     worker.postMessage({
@@ -800,14 +752,11 @@ export function FlightDetailsRoute() {
     };
   }, [computed, fixesLite]);
 
-
   const chartData = React.useMemo(() => {
     if (!computed) return null;
 
     const alt = computed.series.map((p) => [p.tSec, p.altitudeM] as [number, number]);
     const hSpeed = calculateSmoothedSpeedFromSeries(computed.series, 4);
-
-
     const vSpeed = calculateVarioFromSeries(computed.series, varioWindowSec);
 
     const maxT = computed.series.length ? computed.series[computed.series.length - 1].tSec : 0;
@@ -845,7 +794,6 @@ export function FlightDetailsRoute() {
     return `<strong>${Math.round(h)} m</strong>`;
   };
 
-  // Time window from store (throttled updates)
   const win = useTimeWindowStore((s) => s.window);
   const setWindow = useTimeWindowStore((s) => s.setWindow);
   const setDragging = useTimeWindowStore((s) => s.setDragging);
@@ -855,11 +803,9 @@ export function FlightDetailsRoute() {
   const totalSec = win?.totalSec ?? (chartData?.maxT ?? 0);
 
   const windowMarkLine = React.useMemo(() => {
-    // ✅ No selection -> no committed lines at all
     if (!win) return undefined;
     return buildWindowMarkLine(startSec, endSec, totalSec);
   }, [win, startSec, endSec, totalSec]);
-
 
   const segmentStats = React.useMemo(() => {
     if (!computed?.series || !chartData?.vSpeed) return null;
@@ -908,25 +854,16 @@ export function FlightDetailsRoute() {
           silent: true,
           markLine: windowMarkLine,
         },
-
         {
           id: "__preview",
           name: "__preview",
           type: "line",
           data: [],
-          silent: true, // do NOT capture interactions
+          silent: true,
           markLine: {
-            // Start with nothing shown. We'll fill `data` during drag.
             data: [],
-
-            // No arrow heads / symbols at the ends (we want pure vertical lines)
             symbol: "none",
-
-            // No labels on the lines (keeps the chart clean)
             label: { show: false },
-
-            // Slightly different style than the committed window:
-            // same green hue, but more transparent + thinner => clearly "preview"
             lineStyle: {
               color: "rgba(46, 18, 230, 0.75)",
               width: 2,
@@ -976,9 +913,20 @@ export function FlightDetailsRoute() {
         },
       },
       grid: { left: 56, right: 16, top: 24, bottom: 24 },
-      xAxis: { type: "value", min: 0, max: chartData.maxT, axisLabel: { formatter: (v: number) => fmtTime(v) } },
-      yAxis: { type: "value", name: "m/s", min: chartData.vMin, max: chartData.vMax, scale: true },
-      dataZoom: INSIDE_ZOOM,
+      xAxis: {
+        type: "value",
+        min: 0,
+        max: chartData.maxT,
+        axisLabel: { formatter: (v: number) => fmtTime(v) },
+      },
+      yAxis: {
+        type: "value",
+        name: "m/s",
+        min: chartData.vMin,
+        max: chartData.vMax,
+        scale: true,
+      },
+      dataZoom: VARIO_DATAZOOM,
       series: [
         {
           id: "vario",
@@ -987,9 +935,11 @@ export function FlightDetailsRoute() {
           data: chartData.vSpeed,
           showSymbol: false,
           lineStyle: { width: 2 },
-          // smooth: 0.35,
-          // smoothMonotone: "x",
-          markLine: { symbol: ["none", "none"], lineStyle: { type: "dashed", opacity: 0.6 }, data: [{ yAxis: 0 }] },
+          markLine: {
+            symbol: ["none", "none"],
+            lineStyle: { type: "dashed", opacity: 0.6 },
+            data: [{ yAxis: 0 }],
+          },
         },
         {
           id: "__window",
@@ -998,6 +948,25 @@ export function FlightDetailsRoute() {
           data: [],
           silent: true,
           markLine: windowMarkLine,
+        },
+        {
+          id: "__preview",
+          name: "__preview",
+          type: "line",
+          data: [],
+          silent: true,
+          markLine: {
+            data: [],
+            symbol: "none",
+            label: { show: false },
+            lineStyle: {
+              color: "rgba(46, 18, 230, 0.75)",
+              width: 2,
+              type: "dashed",
+              shadowBlur: 6,
+              shadowColor: "rgba(18, 230, 106, 0.9)",
+            },
+          },
         },
       ],
     };
@@ -1039,16 +1008,20 @@ export function FlightDetailsRoute() {
         },
       },
       grid: { left: 56, right: 16, top: 24, bottom: 24 },
-      xAxis: { type: "value", min: 0, max: chartData.maxT, axisLabel: { formatter: (v: number) => fmtTime(v) } },
+      xAxis: {
+        type: "value",
+        min: 0,
+        max: chartData.maxT,
+        axisLabel: { formatter: (v: number) => fmtTime(v) },
+      },
       yAxis: { type: "value", name: "km/h", scale: true },
-      dataZoom: INSIDE_ZOOM,
+      dataZoom: SPEED_DATAZOOM,
       series: [
         {
           id: "speed",
           name: "Ground speed",
           type: "line",
           data: chartData.hSpeed,
-
           showSymbol: false,
           lineStyle: { width: 2 },
         },
@@ -1060,6 +1033,25 @@ export function FlightDetailsRoute() {
           silent: true,
           markLine: windowMarkLine,
         },
+        {
+          id: "__preview",
+          name: "__preview",
+          type: "line",
+          data: [],
+          silent: true,
+          markLine: {
+            data: [],
+            symbol: "none",
+            label: { show: false },
+            lineStyle: {
+              color: "rgba(46, 18, 230, 0.75)",
+              width: 2,
+              type: "dashed",
+              shadowBlur: 6,
+              shadowColor: "rgba(18, 230, 106, 0.9)",
+            },
+          },
+        },
       ],
     };
   }, [chartData, baseOption, windowMarkLine]);
@@ -1067,7 +1059,7 @@ export function FlightDetailsRoute() {
   const [showAlt, setShowAlt] = React.useState<boolean>(() => {
     try {
       const raw = localStorage.getItem(SHOW_ALT_KEY);
-      if (raw == null) return true; // default ON
+      if (raw == null) return true;
       return raw === "1";
     } catch {
       return true;
@@ -1117,7 +1109,6 @@ export function FlightDetailsRoute() {
     const v = varioInstRef.current;
     const s = speedInstRef.current;
 
-    // clean slate for this group
     echarts.disconnect(chartGroupId);
 
     if (!syncEnabled) return;
@@ -1137,7 +1128,6 @@ export function FlightDetailsRoute() {
       instances.push(s);
     }
 
-    // Sync only makes sense with 2+ visible charts
     if (instances.length < 2) return;
 
     for (const inst of instances) {
@@ -1150,7 +1140,6 @@ export function FlightDetailsRoute() {
       echarts.disconnect(chartGroupId);
     };
   }, [chartGroupId, syncEnabled, chartsReadyTick, showAlt, showVario, showSpeed]);
-
 
   React.useEffect(() => {
     const t = window.setTimeout(() => {
@@ -1197,59 +1186,72 @@ export function FlightDetailsRoute() {
             Segment Stats
           </Text>
           <Text size="xs" c="dimmed">
-            {fmtTime(Math.min(startSec, endSec))} → {fmtTime(Math.max(startSec, endSec))} / {fmtTime(totalSec)}
+            {fmtTime(Math.min(startSec, endSec))} → {fmtTime(Math.max(startSec, endSec))} /{" "}
+            {fmtTime(totalSec)}
           </Text>
         </Group>
 
         <SimpleGrid cols={4} spacing="xs" verticalSpacing="xs">
           <Box>
-            <Text size="xs" c="dimmed">Dauer</Text>
+            <Text size="xs" c="dimmed">
+              Dauer
+            </Text>
             <Text fw={600}>{dur}</Text>
           </Box>
 
           <Box>
-            <Text size="xs" c="dimmed">Δ Höhe</Text>
+            <Text size="xs" c="dimmed">
+              Δ Höhe
+            </Text>
             <Text fw={600}>{dAlt == null ? "—" : `${fmtSigned(dAlt, 0)} m`}</Text>
           </Box>
 
           <Box>
-            <Text size="xs" c="dimmed">Alt (Start → Ende)</Text>
-            <Text fw={600}>
-              {altStart == null || altEnd == null ? "—" : `${altStart} → ${altEnd} m`}
+            <Text size="xs" c="dimmed">
+              Alt (Start → Ende)
             </Text>
+            <Text fw={600}>{altStart == null || altEnd == null ? "—" : `${altStart} → ${altEnd} m`}</Text>
           </Box>
 
           <Box>
-            <Text size="xs" c="dimmed">Alt (Min / Max)</Text>
-            <Text fw={600}>
-              {altMin == null || altMax == null ? "—" : `${altMin} / ${altMax} m`}
+            <Text size="xs" c="dimmed">
+              Alt (Min / Max)
             </Text>
+            <Text fw={600}>{altMin == null || altMax == null ? "—" : `${altMin} / ${altMax} m`}</Text>
           </Box>
 
           <Box>
-            <Text size="xs" c="dimmed">Ø Vario ({varioWindowSec}s)</Text>
+            <Text size="xs" c="dimmed">
+              Ø Vario ({varioWindowSec}s)
+            </Text>
             <Text fw={600}>{vAvg == null ? "—" : `${vAvg.toFixed(2)} m/s`}</Text>
           </Box>
 
           <Box>
-            <Text size="xs" c="dimmed">Vario (Min / Max)</Text>
-            <Text fw={600}>
-              {vMin == null || vMax == null ? "—" : `${vMin.toFixed(2)} / ${vMax.toFixed(2)} m/s`}
+            <Text size="xs" c="dimmed">
+              Vario (Min / Max)
             </Text>
+            <Text fw={600}>{vMin == null || vMax == null ? "—" : `${vMin.toFixed(2)} / ${vMax.toFixed(2)} m/s`}</Text>
           </Box>
 
           <Box>
-            <Text size="xs" c="dimmed">Ø Speed</Text>
+            <Text size="xs" c="dimmed">
+              Ø Speed
+            </Text>
             <Text fw={600}>{spAvg == null ? "—" : `${spAvg.toFixed(1)} km/h`}</Text>
           </Box>
 
           <Box>
-            <Text size="xs" c="dimmed">Speed (Max)</Text>
+            <Text size="xs" c="dimmed">
+              Speed (Max)
+            </Text>
             <Text fw={600}>{spMax == null ? "—" : `${spMax.toFixed(1)} km/h`}</Text>
           </Box>
 
           <Box>
-            <Text size="xs" c="dimmed">Climb / Sink / Glide</Text>
+            <Text size="xs" c="dimmed">
+              Climb / Sink / Glide
+            </Text>
             <Text fw={600}>
               {pctClimb == null || pctSink == null || pctGlide == null
                 ? "—"
@@ -1258,11 +1260,11 @@ export function FlightDetailsRoute() {
           </Box>
 
           <Box>
-            <Text size="xs" c="dimmed">Längste Climb-Phase</Text>
+            <Text size="xs" c="dimmed">
+              Längste Climb-Phase
+            </Text>
             <Text fw={600}>
-              {bestClimbT == null || bestClimbDAlt == null
-                ? "—"
-                : `${fmtTime(bestClimbT)} (${fmtSigned(bestClimbDAlt, 0)} m)`}
+              {bestClimbT == null || bestClimbDAlt == null ? "—" : `${fmtTime(bestClimbT)} (${fmtSigned(bestClimbDAlt, 0)} m)`}
             </Text>
           </Box>
         </SimpleGrid>
@@ -1270,187 +1272,85 @@ export function FlightDetailsRoute() {
     );
   }, [showStats, segmentStats, startSec, endSec, totalSec, varioWindowSec]);
 
-
   const zoomChartsToWindow = React.useCallback(() => {
-    const a = altInstRef.current;
-    const v = varioInstRef.current;
-    const s = speedInstRef.current;
-
-    if (!a || !v || !s) return;
-
     const maxT = chartData?.maxT ?? totalSec ?? 0;
     if (!Number.isFinite(maxT) || maxT <= 0) return;
 
     let zs = Math.min(startSec, endSec);
     let ze = Math.max(startSec, endSec);
 
-    // Wenn noch kein Fenster gewählt ist: full range
+    // wenn noch kein Fenster gewählt: full range
     if (!Number.isFinite(zs) || !Number.isFinite(ze) || Math.abs(ze - zs) < 0.0001) {
       zs = 0;
       ze = maxT;
     }
 
-    // clamp
     zs = clamp(zs, 0, maxT);
     ze = clamp(ze, 0, maxT);
     if (ze <= zs) return;
 
-    // Alt chart hat inside + slider -> beide setzen
-    a.dispatchAction?.({ type: "dataZoom", dataZoomIndex: 0, startValue: zs, endValue: ze });
-    a.dispatchAction?.({ type: "dataZoom", dataZoomIndex: 1, startValue: zs, endValue: ze });
+    // Alt: inside (0) + slider (1)
+    if (showAlt && altInstRef.current) {
+      altInstRef.current.dispatchAction?.({ type: "dataZoom", dataZoomIndex: 0, startValue: zs, endValue: ze });
+      altInstRef.current.dispatchAction?.({ type: "dataZoom", dataZoomIndex: 1, startValue: zs, endValue: ze });
+    }
 
-    // Vario + Speed haben nur inside zoom (Index 0)
-    v.dispatchAction?.({ type: "dataZoom", dataZoomIndex: 0, startValue: zs, endValue: ze });
-    s.dispatchAction?.({ type: "dataZoom", dataZoomIndex: 0, startValue: zs, endValue: ze });
-  }, [chartData?.maxT, totalSec, startSec, endSec]);
+    // Vario: inside (0)
+    if (showVario && varioInstRef.current) {
+      varioInstRef.current.dispatchAction?.({ type: "dataZoom", dataZoomIndex: 0, startValue: zs, endValue: ze });
+    }
 
-  // ✅ Reset selection: clears committed window and also cancels any active drag state.
-  const resetSelection = React.useCallback(() => {
-    // Clear committed selection window (stats disappear, committed markLines disappear)
-    setWindow(null);
+    // Speed: inside (0)
+    if (showSpeed && speedInstRef.current) {
+      speedInstRef.current.dispatchAction?.({ type: "dataZoom", dataZoomIndex: 0, startValue: zs, endValue: ze });
+    }
+  }, [chartData?.maxT, totalSec, startSec, endSec, showAlt, showVario, showSpeed]);
 
-    // If a drag is currently active, end it (store flag)
-    setDragging(false);
+  const zoomDisabled =
+    !chartData ||
+    (!showAlt && !showVario && !showSpeed) ||
+    (showAlt && !chartReady.alt) ||
+    (showVario && !chartReady.vario) ||
+    (showSpeed && !chartReady.speed);
 
-    // Also reset local drag ref state (so we don't accidentally commit later)
-    dragRef.current.dragging = false;
-    dragRef.current.startT = null;
-    dragRef.current.lastT = null;
-
-    // NOTE: preview lines are cleared in the ZR handler via clearPreview(),
-    // but from here (outside the ZR effect) we cannot call clearPreview() directly.
-    // That's OK because preview is already cleared on mouseup.
-    //
-    // If you ever want "reset" to immediately clear preview even mid-drag,
-    // we can add a tiny bridge ref (e.g. clearPreviewRef.current = () => ...).
-  }, [setWindow, setDragging]);
-
-  // -----------------------
-  // ZRender Debug + (optional) Range-Select
-  // -----------------------
   const dragRef = React.useRef<{
-    dragging: boolean;     // are we currently dragging?
-    startT: number | null; // tSec at mousedown
-    lastT: number | null;  // last valid tSec during drag (mousemove)
-  }>({ dragging: false, startT: null, lastT: null });
+    dragging: boolean;
+    startT: number | null;
+    lastT: number | null;
+    owner: ChartKind | null;
+  }>({ dragging: false, startT: null, lastT: null, owner: null });
 
-  React.useEffect(() => {
-    if (!showAlt) return;
+  const getVisibleCharts = React.useCallback(() => {
+    const out: Array<{ kind: ChartKind; inst: any }> = [];
+    if (showAlt && altInstRef.current) out.push({ kind: "alt", inst: altInstRef.current });
+    if (showVario && varioInstRef.current) out.push({ kind: "vario", inst: varioInstRef.current });
+    if (showSpeed && speedInstRef.current) out.push({ kind: "speed", inst: speedInstRef.current });
+    return out;
+  }, [showAlt, showVario, showSpeed]);
 
-    const inst = altInstRef.current;
-    if (!inst) {
-      console.log("[ZR] no altInstRef yet (wait for chartReadyTick)", { chartsReadyTick });
-      return;
-    }
+  const setPreviewLinesAll = React.useCallback((a: number, b: number) => {
+    const x1 = Math.min(a, b);
+    const x2 = Math.max(a, b);
 
-    const zr = inst.getZr?.();
-    if (!zr) {
-      console.warn("[ZR] getZr() missing on inst", inst);
-      return;
-    }
-
-
-    // remembers whether we disabled pan so we can restore it reliably
-    const panDisabledRef = { current: false };
-
-    const disablePanWhileSelecting = () => {
-      if (panDisabledRef.current) return;
-      panDisabledRef.current = true;
-
-      // ✅ disable pan on inside zoom while selecting
-      inst.setOption(
-        {
-          dataZoom: [
-            { id: "dz_inside_alt", moveOnMouseMove: false },
-          ],
-        },
-        { silent: true }
-      );
-    };
-
-    const restorePanAfterSelecting = () => {
-      if (!panDisabledRef.current) return;
-      panDisabledRef.current = false;
-
-      // ✅ restore default pan behavior
-      inst.setOption(
-        {
-          dataZoom: [
-            { id: "dz_inside_alt", moveOnMouseMove: true },
-          ],
-        },
-        { silent: true }
-      );
-    };
-
-
-    const isSelectGesture = (ev: any) => {
-      // Shift gedrückt => Range-Select
-      const e = ev?.event ?? ev;
-      return !!e?.shiftKey;
-    };
-
-    const stopEvent = (ev: any) => {
-      const e = ev?.event ?? ev;
-      // verhindert ECharts dataZoom drag/pan
-      e?.preventDefault?.();
-      e?.stopPropagation?.();
-    };
-
-    console.log("[ZR] attaching handlers ✅", { chartsReadyTick });
-
-    const getXY = (ev: any) => {
-      const ox = ev?.offsetX;
-      const oy = ev?.offsetY;
-      if (typeof ox === "number" && typeof oy === "number") return { x: ox, y: oy };
-
-      const ne = ev?.event;
-      const x2 = ne?.offsetX;
-      const y2 = ne?.offsetY;
-      if (typeof x2 === "number" && typeof y2 === "number") return { x: x2, y: y2 };
-
-      return null;
-    };
-
-    const pxToT = (x: number, y: number) => {
-      try {
-        const v = inst.convertFromPixel({ gridIndex: 0 }, [x, y]);
-        const t = Array.isArray(v) ? v[0] : v;
-        return typeof t === "number" && Number.isFinite(t) ? t : null;
-      } catch {
-        return null;
-      }
-    };
-
-    // Draw/Update the preview lines in the ALT chart.
-    // We update ONLY the "__preview" series by id, so the rest of the option stays untouched.
-    const setPreviewLines = (a: number, b: number) => {
-      // Normalize (a <= b)
-      const x1 = Math.min(a, b);
-      const x2 = Math.max(a, b);
-
+    for (const { inst } of getVisibleCharts()) {
       try {
         inst.setOption(
           {
             series: [
               {
                 id: "__preview",
-                markLine: {
-                  data: [{ xAxis: x1 }, { xAxis: x2 }],
-                },
+                markLine: { data: [{ xAxis: x1 }, { xAxis: x2 }] },
               },
             ],
           },
-          {
-            silent: true,
-          }
+          { silent: true }
         );
-      } catch (e) {
-        console.warn("[ZR] setPreviewLines failed", e);
-      }
-    };
+      } catch { }
+    }
+  }, [getVisibleCharts]);
 
-    const clearPreview = () => {
+  const clearPreviewAll = React.useCallback(() => {
+    for (const { inst } of getVisibleCharts()) {
       try {
         inst.setOption(
           {
@@ -1463,162 +1363,234 @@ export function FlightDetailsRoute() {
           },
           { silent: true }
         );
-      } catch {
-        // ignore
-      }
-    };
+      } catch { }
+    }
+  }, [getVisibleCharts]);
 
-    // ----------------------------
-    // ZR Handlers (Step 2)
-    // ----------------------------
+  const setPanEnabled = React.useCallback((kind: ChartKind, enabled: boolean) => {
+    const inst =
+      kind === "alt" ? altInstRef.current : kind === "vario" ? varioInstRef.current : speedInstRef.current;
+    if (!inst) return;
 
-    const onDown = (ev: any) => {
-      // ✅ Ohne Shift: ECharts darf normal pannen/zoomen
-      if (!isSelectGesture(ev)) return;
+    const dzId = kind === "alt" ? "dz_inside_alt" : kind === "vario" ? "dz_inside_vario" : "dz_inside_speed";
 
-      // ✅ Mit Shift: ECharts Pan/Drag sofort unterdrücken (wichtig!)
-      stopEvent(ev);
-      disablePanWhileSelecting();
+    try {
+      inst.setOption(
+        {
+          dataZoom: [{ id: dzId, moveOnMouseMove: enabled }],
+        },
+        { silent: true }
+      );
+    } catch { }
+  }, []);
 
-      const xy = getXY(ev);
-      if (!xy) return;
+  const resetSelection = React.useCallback(() => {
+    setWindow(null);
+    setDragging(false);
 
-      const t = pxToT(xy.x, xy.y);
-      if (t == null) return;
+    dragRef.current.dragging = false;
+    dragRef.current.startT = null;
+    dragRef.current.lastT = null;
+    dragRef.current.owner = null;
 
-      dragRef.current.dragging = true;
-      dragRef.current.startT = t;
-      dragRef.current.lastT = t;
+    // clear any preview immediately
+    clearPreviewAll();
+  }, [setWindow, setDragging, clearPreviewAll]);
 
-      setDragging(true);
+  const isSelectGesture = (ev: any) => {
+    const e = ev?.event ?? ev;
+    return !!e?.shiftKey;
+  };
 
-      // preview init
-      setPreviewLines(t, t);
-    };
+  const stopEvent = (ev: any) => {
+    const e = ev?.event ?? ev;
+    e?.preventDefault?.();
+    e?.stopPropagation?.();
+  };
 
-    const onMove = (ev: any) => {
-      if (!dragRef.current.dragging) return;
+  const attachRangeSelect = React.useCallback(
+    (kind: ChartKind) => {
+      const inst =
+        kind === "alt" ? altInstRef.current : kind === "vario" ? varioInstRef.current : speedInstRef.current;
+      if (!inst) return;
 
-      // ✅ solange selection aktiv ist, ECharts Pan blocken
-      stopEvent(ev);
-      disablePanWhileSelecting();
+      const zr = inst.getZr?.();
+      if (!zr) return;
 
-      const xy = getXY(ev);
-      if (!xy) return;
+      const getXY = (ev: any) => {
+        const ox = ev?.offsetX;
+        const oy = ev?.offsetY;
+        if (typeof ox === "number" && typeof oy === "number") return { x: ox, y: oy };
 
-      const t = pxToT(xy.x, xy.y);
-      if (t == null) return;
+        const ne = ev?.event;
+        const x2 = ne?.offsetX;
+        const y2 = ne?.offsetY;
+        if (typeof x2 === "number" && typeof y2 === "number") return { x: x2, y: y2 };
 
-      dragRef.current.lastT = t;
+        return null;
+      };
 
-      const s0 = dragRef.current.startT;
-      const s1 = dragRef.current.lastT;
-      if (s0 != null && s1 != null) setPreviewLines(s0, s1);
-    };
+      const pxToT = (x: number, y: number) => {
+        try {
+          const v = inst.convertFromPixel({ gridIndex: 0 }, [x, y]);
+          const t = Array.isArray(v) ? v[0] : v;
+          return typeof t === "number" && Number.isFinite(t) ? t : null;
+        } catch {
+          return null;
+        }
+      };
 
+      const onDown = (ev: any) => {
+        if (!isSelectGesture(ev)) return;
 
-    const onUp = (ev: any) => {
-      if (!dragRef.current.dragging) return;
+        // Lock ownership: only first chart receiving mousedown becomes owner
+        if (dragRef.current.dragging && dragRef.current.owner && dragRef.current.owner !== kind) return;
 
-      stopEvent(ev);
+        stopEvent(ev);
 
-      const xy = getXY(ev);
-      const t = xy ? pxToT(xy.x, xy.y) : null;
+        const xy = getXY(ev);
+        if (!xy) return;
 
-      // Use t if available, otherwise keep the last known t
-      if (t != null) dragRef.current.lastT = t;
+        const t = pxToT(xy.x, xy.y);
+        if (t == null) return;
 
-      // End dragging (local)
-      dragRef.current.dragging = false;
+        dragRef.current.dragging = true;
+        dragRef.current.owner = kind;
+        dragRef.current.startT = t;
+        dragRef.current.lastT = t;
 
-      // End dragging (store flag)
-      setDragging(false);
+        setDragging(true);
 
-      const startT = dragRef.current.startT;
-      const lastT = dragRef.current.lastT;
+        // disable pan only on the owner chart
+        setPanEnabled(kind, false);
 
-      restorePanAfterSelecting();
+        setPreviewLinesAll(t, t);
+      };
 
-      if (startT == null || lastT == null) {
-        // Nothing meaningful selected -> just clear preview
-        clearPreview();
+      const onMove = (ev: any) => {
+        if (!dragRef.current.dragging) return;
+        if (dragRef.current.owner !== kind) return;
+
+        stopEvent(ev);
+
+        const xy = getXY(ev);
+        if (!xy) return;
+
+        const t = pxToT(xy.x, xy.y);
+        if (t == null) return;
+
+        dragRef.current.lastT = t;
+
+        const s0 = dragRef.current.startT;
+        const s1 = dragRef.current.lastT;
+        if (s0 != null && s1 != null) setPreviewLinesAll(s0, s1);
+      };
+
+      const onUp = (ev: any) => {
+        if (!dragRef.current.dragging) return;
+        if (dragRef.current.owner !== kind) return;
+
+        stopEvent(ev);
+
+        const xy = getXY(ev);
+        const t = xy ? pxToT(xy.x, xy.y) : null;
+        if (t != null) dragRef.current.lastT = t;
+
+        dragRef.current.dragging = false;
+
+        setDragging(false);
+
+        const startT = dragRef.current.startT;
+        const lastT = dragRef.current.lastT;
+
+        // restore pan on owner chart
+        setPanEnabled(kind, true);
+
+        const maxT = chartData?.maxT ?? totalSec ?? 0;
+
+        if (startT == null || lastT == null) {
+          clearPreviewAll();
+          dragRef.current.startT = null;
+          dragRef.current.lastT = null;
+          dragRef.current.owner = null;
+          return;
+        }
+
+        let a = Math.min(startT, lastT);
+        let b = Math.max(startT, lastT);
+
+        if (Number.isFinite(maxT) && maxT > 0) {
+          a = clamp(a, 0, maxT);
+          b = clamp(b, 0, maxT);
+        }
+
+        const MIN_RANGE_SEC = 1.0;
+        if (b - a < MIN_RANGE_SEC) {
+          clearPreviewAll();
+          dragRef.current.startT = null;
+          dragRef.current.lastT = null;
+          dragRef.current.owner = null;
+          return;
+        }
+
+        setWindow({
+          startSec: a,
+          endSec: b,
+          totalSec: Number.isFinite(maxT) && maxT > 0 ? maxT : b,
+        });
+
+        clearPreviewAll();
+
         dragRef.current.startT = null;
         dragRef.current.lastT = null;
-        return;
-      }
+        dragRef.current.owner = null;
+      };
 
-      // -----------------------------
-      // Step 4: Normalize + clamp
-      // -----------------------------
-      let a = Math.min(startT, lastT);
-      let b = Math.max(startT, lastT);
+      const onGlobalOut = () => {
+        if (!dragRef.current.dragging) return;
+        if (dragRef.current.owner !== kind) return;
 
-      // totalSec: prefer chartData.maxT; fallback to existing totalSec
-      const maxT = chartData?.maxT ?? totalSec ?? 0;
-
-      if (Number.isFinite(maxT) && maxT > 0) {
-        a = clamp(a, 0, maxT);
-        b = clamp(b, 0, maxT);
-      }
-
-      // Ignore tiny selections (prevents accidental clicks setting a near-zero window)
-      const MIN_RANGE_SEC = 1.0;
-      if (b - a < MIN_RANGE_SEC) {
-        clearPreview();
+        dragRef.current.dragging = false;
         dragRef.current.startT = null;
         dragRef.current.lastT = null;
-        return;
-      }
 
-      // -----------------------------
-      // Step 5: Commit to store
-      // -----------------------------
-      setWindow({
-        startSec: a,
-        endSec: b,
-        totalSec: Number.isFinite(maxT) && maxT > 0 ? maxT : b,
-      });
+        setDragging(false);
 
-      // After commit, we remove preview lines.
-      // The committed lines are rendered via "__window" (windowMarkLine from store).
-      clearPreview();
+        // restore pan on owner chart
+        setPanEnabled(kind, true);
 
-      // Reset transient drag state
-      dragRef.current.startT = null;
-      dragRef.current.lastT = null;
-    };
+        clearPreviewAll();
 
+        dragRef.current.owner = null;
+      };
 
+      zr.on("mousedown", onDown);
+      zr.on("mousemove", onMove);
+      zr.on("mouseup", onUp);
+      zr.on("globalout", onGlobalOut);
 
+      return () => {
+        zr.off("mousedown", onDown);
+        zr.off("mousemove", onMove);
+        zr.off("mouseup", onUp);
+        zr.off("globalout", onGlobalOut);
+      };
+    },
+    [chartData?.maxT, totalSec, setDragging, setPanEnabled, setPreviewLinesAll, clearPreviewAll, setWindow]
+  );
 
-    const onMouseOut = () => {
-      // optional: nur canceln, wenn gerade dragging
-      if (!dragRef.current.dragging) return;
+  // Attach range-select handlers to ALL visible charts (Alt/Vario/Speed)
+  React.useEffect(() => {
+    const cleanups: Array<(() => void) | undefined> = [];
 
-      console.log("[ZR] mouseout: cancel drag");
-      dragRef.current.dragging = false;
-      dragRef.current.startT = null;
-      dragRef.current.lastT = null;
-
-      // Step 3 cleanup kommt später: preview löschen
-    };
-
-    zr.on("mousedown", onDown);
-    zr.on("mousemove", onMove);
-    zr.on("mouseup", onUp);
-    zr.on("globalout", onMouseOut);
+    if (showAlt && altInstRef.current) cleanups.push(attachRangeSelect("alt"));
+    if (showVario && varioInstRef.current) cleanups.push(attachRangeSelect("vario"));
+    if (showSpeed && speedInstRef.current) cleanups.push(attachRangeSelect("speed"));
 
     return () => {
-      console.log("[ZR] detaching handlers 🧹");
-      zr.off("mousedown", onDown);
-      zr.off("mousemove", onMove);
-      zr.off("mouseup", onUp);
-      zr.off("globalout", onMouseOut);
+      for (const fn of cleanups) fn?.();
     };
-  }, [showAlt, chartsReadyTick, chartData?.maxT, totalSec, setWindow, setDragging]);
-
-
-
+  }, [showAlt, showVario, showSpeed, chartsReadyTick, attachRangeSelect]);
 
   return (
     <Box p="md">
@@ -1629,12 +1601,7 @@ export function FlightDetailsRoute() {
           </Button>
 
           <Group gap="md" align="center">
-            <Button
-              size="xs"
-              variant="light"
-              onClick={resetSelection}
-              disabled={!win} // only enabled if a selection exists
-            >
+            <Button size="xs" variant="light" onClick={resetSelection} disabled={!win}>
               Reset selection
             </Button>
 
@@ -1648,7 +1615,7 @@ export function FlightDetailsRoute() {
               size="xs"
               variant="light"
               onClick={zoomChartsToWindow}
-              disabled={!chartData || !altInstRef.current || !varioInstRef.current || !speedInstRef.current}
+              disabled={zoomDisabled}
             >
               Zoom to window
             </Button>
@@ -1657,11 +1624,48 @@ export function FlightDetailsRoute() {
             <Checkbox label="Follow marker" checked={followEnabled} onChange={(e) => setFollowEnabled(e.currentTarget.checked)} />
             <Checkbox label="Show stats" checked={showStats} onChange={(e) => setShowStats(e.currentTarget.checked)} />
 
-            <Checkbox label="Alt" checked={showAlt} onChange={(e) => setShowAlt(e.currentTarget.checked)} />
-            <Checkbox label="Vario" checked={showVario} onChange={(e) => setShowVario(e.currentTarget.checked)} />
-            <Checkbox label="Speed" checked={showSpeed} onChange={(e) => setShowSpeed(e.currentTarget.checked)} />
+            <Checkbox
+              label="Alt"
+              checked={showAlt}
+              onChange={(e) => {
+                const next = e.currentTarget.checked;
+                setShowAlt(next);
+                if (!next) {
+                  altInstRef.current = null;
+                  setChartReady((r) => ({ ...r, alt: false }));
+                  setChartsReadyTick((x) => x + 1);
+                }
+              }}
+            />
+            <Checkbox
+              label="Vario"
+              checked={showVario}
+              onChange={(e) => {
+                const next = e.currentTarget.checked;
+                setShowVario(next);
+                if (!next) {
+                  varioInstRef.current = null;
+                  setChartReady((r) => ({ ...r, vario: false }));
+                  setChartsReadyTick((x) => x + 1);
+                }
+              }}
+            />
 
-            {/* ✅ 4s default, änderbar */}
+            <Checkbox
+              label="Speed"
+              checked={showSpeed}
+              onChange={(e) => {
+                const next = e.currentTarget.checked;
+                setShowSpeed(next);
+                if (!next) {
+                  speedInstRef.current = null;
+                  setChartReady((r) => ({ ...r, speed: false }));
+                  setChartsReadyTick((x) => x + 1);
+                }
+              }}
+            />
+
+
             <NumberInput
               label="Vario win (s)"
               value={varioWindowSec}
@@ -1709,7 +1713,6 @@ export function FlightDetailsRoute() {
               minHeight: 520,
             }}
           >
-
             {/* LEFT: Charts */}
             <Box
               style={{
@@ -1718,24 +1721,21 @@ export function FlightDetailsRoute() {
                 minWidth: 320,
                 display: "flex",
                 flexDirection: "column",
-                minHeight: 0,          // ✅ wichtig in flex layouts
-                overflow: "hidden",    // ✅ sonst “frisst” scroll die Höhe
+                minHeight: 0,
+                overflow: "hidden",
               }}
             >
-              {/* Stats: nimmt nur benötigte Höhe */}
               {StatsPanel}
 
-              {/* Charts: füllen den Rest */}
               <Box
                 style={{
                   flex: 1,
-                  minHeight: 0,        // ✅ erlaubt Kindern zu schrumpfen
+                  minHeight: 0,
                   display: "flex",
                   flexDirection: "column",
                   gap: 10,
                 }}
               >
-                {/* Chart 1 */}
                 {showAlt && (
                   <Box style={{ flex: 1, minHeight: 140 }}>
                     <Text size="sm" fw={600} mb={4}>
@@ -1748,16 +1748,15 @@ export function FlightDetailsRoute() {
                       style={{ height: "100%", width: "100%" }}
                       notMerge={false}
                       onChartReady={(inst) => {
-                        console.log("[ALT] onChartReady", inst);
                         altInstRef.current = inst;
                         inst.group = chartGroupId;
+                        setChartReady((r) => ({ ...r, alt: true }));
                         setChartsReadyTick((x) => x + 1);
                       }}
                     />
                   </Box>
                 )}
 
-                {/* Chart 2 */}
                 {showVario && (
                   <Box style={{ flex: 1, minHeight: 140 }}>
                     <Text size="sm" fw={600} mb={4}>
@@ -1772,13 +1771,13 @@ export function FlightDetailsRoute() {
                       onChartReady={(inst) => {
                         varioInstRef.current = inst;
                         inst.group = chartGroupId;
+                        setChartReady((r) => ({ ...r, vario: true }));
                         setChartsReadyTick((x) => x + 1);
                       }}
                     />
                   </Box>
                 )}
 
-                {/* Chart 3 */}
                 {showSpeed && (
                   <Box style={{ flex: 1, minHeight: 140 }}>
                     <Text size="sm" fw={600} mb={4}>
@@ -1793,8 +1792,10 @@ export function FlightDetailsRoute() {
                       onChartReady={(inst) => {
                         speedInstRef.current = inst;
                         inst.group = chartGroupId;
+                        setChartReady((r) => ({ ...r, speed: true }));
                         setChartsReadyTick((x) => x + 1);
                       }}
+
                     />
                   </Box>
                 )}
@@ -1806,11 +1807,8 @@ export function FlightDetailsRoute() {
                     </Text>
                   </Paper>
                 )}
-
               </Box>
             </Box>
-
-
 
             {/* MIDDLE: Splitter */}
             <Box
