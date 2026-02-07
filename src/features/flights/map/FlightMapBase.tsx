@@ -14,10 +14,9 @@ import { MapContainer, TileLayer, Polyline, useMap, useMapEvents } from "react-l
 
 export type BaseMap = "osm" | "topo";
 
-const FOLLOW_MAX_ZOOM = 14;     // wenn Follow an: nicht näher als das
-const FOLLOW_PAN_MS = 250;      // Dauer pan animation
-const FOLLOW_FIT_PADDING = 60;  // px padding beim fitBounds
-
+const FOLLOW_MAX_ZOOM = 14; // wenn Follow an: nicht näher als das
+const FOLLOW_PAN_MS = 250; // Dauer (nicht mehr panTo, aber bleibt als "feel" Referenz)
+const FOLLOW_FIT_PADDING = 60; // px padding beim fitBounds
 
 export type FixPoint = {
     tSec: number; // relative seconds (0..duration)
@@ -27,7 +26,10 @@ export type FixPoint = {
 };
 
 function boundsForRange(points: { lat: number; lng: number }[], from: number, to: number) {
-    let minLat = Infinity, minLng = Infinity, maxLat = -Infinity, maxLng = -Infinity;
+    let minLat = Infinity,
+        minLng = Infinity,
+        maxLat = -Infinity,
+        maxLng = -Infinity;
 
     for (let i = from; i <= to; i++) {
         const p = points[i];
@@ -67,7 +69,7 @@ function pct(sec: number, total: number) {
 function weightsForZoom(z: number) {
     const line = clamp(7.0 - z * 0.45, 2.2, 4.8);
     const outlineExtra = clamp(Math.round(2.0 + (z - 12) * 0.9), 2, 6);
-    const outlineOpacity = clamp(0.20 + (z - 12) * 0.15, 0.2, 0.75);
+    const outlineOpacity = clamp(0.2 + (z - 12) * 0.15, 0.2, 0.75);
     return { line, outlineExtra, outlineOpacity };
 }
 
@@ -144,7 +146,6 @@ function FitToWindowOnCommit({
     return null;
 }
 
-
 function FitToSelectionOrFull({
     fullBounds,
     windowBounds,
@@ -184,48 +185,6 @@ function FitToSelectionOrFull({
 
     return null;
 }
-
-
-function FollowZoomOutOnEnable({
-    followEnabled,
-    windowBounds,
-    fullBounds,
-}: {
-    followEnabled: boolean;
-    windowBounds: LatLngBoundsExpression | null;
-    fullBounds: LatLngBoundsExpression | null;
-}) {
-    const map = useMap();
-    const prevRef = React.useRef<boolean>(followEnabled);
-
-    React.useEffect(() => {
-        const was = prevRef.current;
-        prevRef.current = followEnabled;
-
-        // nur bei Transition false -> true
-        if (!followEnabled || was) return;
-
-        // 1) Zoom cap (falls zu nah)
-        const z = map.getZoom();
-        if (z > FOLLOW_MAX_ZOOM) {
-            map.setZoom(FOLLOW_MAX_ZOOM, { animate: true });
-        }
-
-        // 2) Optional: einmalig fitBounds mit maxZoom => stabiler als nur zoom setzen
-        const b = windowBounds ?? fullBounds;
-        if (b) {
-            map.fitBounds(b, {
-                padding: [FOLLOW_FIT_PADDING, FOLLOW_FIT_PADDING],
-                maxZoom: FOLLOW_MAX_ZOOM,
-                animate: true,
-            });
-        }
-    }, [followEnabled, map, windowBounds, fullBounds]);
-
-    return null;
-}
-
-
 
 function ZoomWatcher({ onZoom }: { onZoom: (z: number) => void }) {
     const lastRef = React.useRef<number | null>(null);
@@ -417,7 +376,6 @@ function ActiveTrackLayer({
 
 function HoverMarker({ fixes, followEnabled }: { fixes: FixPoint[]; followEnabled: boolean }) {
     const map = useMap();
-    const lastZoomFixAtRef = React.useRef(0);
 
     const coreRef = React.useRef<L.CircleMarker | null>(null);
     const haloRef = React.useRef<L.CircleMarker | null>(null);
@@ -430,15 +388,23 @@ function HoverMarker({ fixes, followEnabled }: { fixes: FixPoint[]; followEnable
 
     const lastPanAtRef = React.useRef(0);
 
-    // ✅ Smooth animation refs
+    // ✅ Smooth animation refs (marker)
     const targetRef = React.useRef<LatLngTuple | null>(null);
     const currentRef = React.useRef<LatLngTuple | null>(null);
     const rafRef = React.useRef<number | null>(null);
+
+    // ✅ Smooth animation refs (map follow)
+    const mapTargetCenterRef = React.useRef<L.LatLng | null>(null);
+    const mapCurrentCenterRef = React.useRef<L.LatLng | null>(null);
 
     // --- helpers ---
     const clamp01 = (x: number) => (x < 0 ? 0 : x > 1 ? 1 : x);
 
     const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
+
+    // smoothing factors
+    const MARKER_K = 0.18;
+    const MAP_K = 0.12;
 
     // ✅ Find interpolated position for arbitrary tSec
     const positionAt = React.useCallback(
@@ -483,24 +449,23 @@ function HoverMarker({ fixes, followEnabled }: { fixes: FixPoint[]; followEnable
         if (coreRef.current || haloRef.current) return;
 
         const halo = L.circleMarker([0, 0], {
-            radius: 18,                // größer
+            radius: 18, // größer
             weight: 0,
             opacity: 0,
             fillOpacity: 0,
-            fillColor: "#00ffff",      // cyan glow
+            fillColor: "#00ffff", // cyan glow
             interactive: false,
         });
 
         const core = L.circleMarker([0, 0], {
-            radius: 7,                 // größerer Kern
+            radius: 7, // größerer Kern
             weight: 3,
-            color: "#000000",          // schwarzer Rand
+            color: "#000000", // schwarzer Rand
             opacity: 0,
             fillOpacity: 0,
-            fillColor: "#ffffff",      // weißer Kern
+            fillColor: "#ffffff", // weißer Kern
             interactive: false,
         });
-
 
         halo.addTo(map);
         core.addTo(map);
@@ -535,6 +500,11 @@ function HoverMarker({ fixes, followEnabled }: { fixes: FixPoint[]; followEnable
                 halo.setStyle({ opacity: 0, fillOpacity: 0 });
                 core.setStyle({ opacity: 0, fillOpacity: 0 });
                 currentRef.current = null;
+
+                // stop map follow too
+                mapTargetCenterRef.current = null;
+                mapCurrentCenterRef.current = null;
+
                 rafRef.current = null;
                 return;
             }
@@ -547,15 +517,14 @@ function HoverMarker({ fixes, followEnabled }: { fixes: FixPoint[]; followEnable
             let cur = currentRef.current;
             if (!cur) cur = target;
 
-            // smooth toward target
-            const k = 0.18; // smoothing factor
-            const next: LatLngTuple = [lerp(cur[0], target[0], k), lerp(cur[1], target[1], k)];
+            // smooth toward target (marker)
+            const next: LatLngTuple = [lerp(cur[0], target[0], MARKER_K), lerp(cur[1], target[1], MARKER_K)];
 
             currentRef.current = next;
             halo.setLatLng(next);
             core.setLatLng(next);
 
-            // follow-pan logic (same idea as before, just using smooth position)
+            // follow logic: decide whether we need to move/zoom the map
             if (followRef.current) {
                 const now = Date.now();
                 if (now - lastPanAtRef.current >= 120) {
@@ -572,7 +541,11 @@ function HoverMarker({ fixes, followEnabled }: { fixes: FixPoint[]; followEnable
                     const safeSE = L.point(se.x - marginPx, se.y - marginPx);
 
                     if (safeSE.x > safeNW.x && safeSE.y > safeNW.y) {
-                        const safeBounds = L.latLngBounds(map.containerPointToLatLng(safeNW), map.containerPointToLatLng(safeSE));
+                        const safeBounds = L.latLngBounds(
+                            map.containerPointToLatLng(safeNW),
+                            map.containerPointToLatLng(safeSE)
+                        );
+
                         if (!safeBounds.contains(ll)) {
                             // 1) Wenn Marker wirklich aus dem Viewport raus ist (oder kurz davor),
                             //    zoom-out minimal, so dass Marker wieder sichtbar ist.
@@ -587,31 +560,63 @@ function HoverMarker({ fixes, followEnabled }: { fixes: FixPoint[]; followEnable
                                 p.x < edgePad || p.y < edgePad || p.x > size.x - edgePad || p.y > size.y - edgePad;
 
                             if (!viewB.contains(ll) || nearOrOutside) {
+                                const z = map.getZoom();
+                                if (z > FOLLOW_MAX_ZOOM) {
+                                    map.setZoom(FOLLOW_MAX_ZOOM, { animate: true });
+                                }
+
                                 // erweitere aktuelle Bounds um Marker und fitte – maxZoom = currentZoom => nur rauszoomen
                                 const b2 = viewB.extend(ll);
 
                                 map.fitBounds(b2, {
                                     padding: [FOLLOW_FIT_PADDING, FOLLOW_FIT_PADDING],
-                                    maxZoom: map.getZoom(),       // ✅ nie reinzoomen
+                                    maxZoom: map.getZoom(), // ✅ nie reinzoomen
                                     animate: true,
                                 });
-                            } else {
-                                // 2) Marker ist sichtbar, aber nicht in "safe zone" => sanft pan
-                                map.panTo(ll, { animate: true, duration: 0.25 });
-                            }
-                        }
 
+                                // nach fitBounds: kein center-lerp "gegen" das Fit
+                                mapTargetCenterRef.current = null;
+                                mapCurrentCenterRef.current = null;
+                            } else {
+                                // 2) Marker ist sichtbar, aber nicht in "safe zone":
+                                //    statt panTo: setze Map-Target => Smooth Map Center Lerp
+                                mapTargetCenterRef.current = ll;
+                            }
+                        } else {
+                            // Marker wieder "safe" => stop map follow lerp
+                            mapTargetCenterRef.current = null;
+                            mapCurrentCenterRef.current = null;
+                        }
                     }
                 }
+            } else {
+                // follow aus => stop map follow lerp
+                mapTargetCenterRef.current = null;
+                mapCurrentCenterRef.current = null;
             }
 
-            // stop when close enough
+            // ✅ Smooth map center toward target (if any)
+            const mapTarget = mapTargetCenterRef.current;
+            if (followRef.current && mapTarget) {
+                let curC = mapCurrentCenterRef.current;
+                if (!curC) curC = map.getCenter();
+
+                const nextC = L.latLng(lerp(curC.lat, mapTarget.lat, MAP_K), lerp(curC.lng, mapTarget.lng, MAP_K));
+
+                mapCurrentCenterRef.current = nextC;
+
+                // IMPORTANT: no Leaflet animation; we animate ourselves via RAF
+                map.setView(nextC, map.getZoom(), { animate: false });
+            }
+
+            // stop when close enough (marker), but keep running if map is still lerping
             const dLat = Math.abs(next[0] - target[0]);
             const dLon = Math.abs(next[1] - target[1]);
             const closeEnough = dLat < 1e-7 && dLon < 1e-7;
 
-            if (closeEnough) {
-                // snap to final + stop
+            const keepBecauseMap = !!(followRef.current && mapTargetCenterRef.current);
+
+            if (closeEnough && !keepBecauseMap) {
                 currentRef.current = target;
                 halo.setLatLng(target);
                 core.setLatLng(target);
@@ -632,7 +637,6 @@ function HoverMarker({ fixes, followEnabled }: { fixes: FixPoint[]; followEnable
 
             if (t == null) {
                 targetRef.current = null;
-                // animation loop will hide + stop itself
                 startRafIfNeeded();
                 return;
             }
@@ -653,7 +657,6 @@ function HoverMarker({ fixes, followEnabled }: { fixes: FixPoint[]; followEnable
 
     return null;
 }
-
 
 function dragStyleForZoomTopoGlow(z: number) {
     const t = clamp((z - 10) / 6, 0, 1);
@@ -696,7 +699,6 @@ export function FlightMap({
     const isDragging = useTimeWindowStore((s) => s.isDragging);
     const setDragging = useTimeWindowStore((s) => s.setDragging);
     const storeDragging = useTimeWindowStore((s) => s.isDragging);
-
 
     const windowBounds = React.useMemo(() => {
         if (!win) return null;
@@ -743,8 +745,6 @@ export function FlightMap({
 
     const center: LatLngTuple = fullPoints.length ? fullPoints[0] : [48.1372, 11.5756];
     const bounds = React.useMemo(() => computeBounds(fullPoints), [fullPoints]);
-
-
 
     const { line, outlineExtra, outlineOpacity } = React.useMemo(() => weightsForZoom(zoom), [zoom]);
     const dragStyle = React.useMemo(() => dragStyleForZoomTopoGlow(zoom), [zoom]);
@@ -871,14 +871,8 @@ export function FlightMap({
                     ))}
 
                     <ZoomWatcher onZoom={setZoom} />
-
-                    <FollowZoomOutOnEnable
-                        followEnabled={followEnabled}
-                        windowBounds={windowBounds}
-                        fullBounds={bounds}
-                    />
-
                     <MapAutoResize watchKey={watchKey} />
+
                     {/* <FitToTrackOnce bounds={bounds} watchKey={watchKey} /> */}
                     <FitToWindowOnCommit
                         bounds={windowBounds}
