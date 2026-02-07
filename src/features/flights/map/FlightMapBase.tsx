@@ -111,7 +111,6 @@ function FitToTrackOnce({
     return null;
 }
 
-
 function FitToWindowOnCommit({
     bounds,
     commitKey,
@@ -124,15 +123,18 @@ function FitToWindowOnCommit({
     const map = useMap();
     const lastKeyRef = React.useRef<string>("");
 
+    const autoFitSelection = useTimeWindowStore((s) => s.autoFitSelection); // ✅
+
     React.useEffect(() => {
         if (!enabled) return;
+        if (!autoFitSelection) return; // ✅ HIER ist die Logik „nicht zoomen“
         if (!bounds) return;
 
         if (lastKeyRef.current === commitKey) return;
         lastKeyRef.current = commitKey;
 
         map.fitBounds(bounds, { padding: [18, 18] });
-    }, [map, bounds, commitKey, enabled]);
+    }, [map, bounds, commitKey, enabled, autoFitSelection]);
 
     return null;
 }
@@ -154,8 +156,13 @@ function FitToSelectionOrFull({
     const map = useMap();
     const lastKeyRef = React.useRef<string>("");
 
+    const autoFitSelection = useTimeWindowStore((s) => s.autoFitSelection); // ✅
+
     React.useEffect(() => {
         if (isDragging) return;
+
+        // ✅ WICHTIG: nur Selection-Fit blocken, Full-Fit (Reset) erlauben
+        if (win && !autoFitSelection) return;
 
         const targetBounds = win ? windowBounds : fullBounds;
         if (!targetBounds) return;
@@ -168,10 +175,11 @@ function FitToSelectionOrFull({
         lastKeyRef.current = key;
 
         map.fitBounds(targetBounds, { padding: [18, 18] });
-    }, [map, fullBounds, windowBounds, win, isDragging, watchKey]);
+    }, [map, fullBounds, windowBounds, win, isDragging, watchKey, autoFitSelection]);
 
     return null;
 }
+
 
 
 function ZoomWatcher({ onZoom }: { onZoom: (z: number) => void }) {
@@ -580,6 +588,8 @@ export function FlightMap({
 
     const startPct = pct(startSec, totalSeconds);
     const endPct = pct(endSec, totalSeconds);
+
+    const autoFitSelection = useTimeWindowStore((s) => s.autoFitSelection);
 
 
     return (

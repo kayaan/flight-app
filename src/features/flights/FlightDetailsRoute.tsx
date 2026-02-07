@@ -43,6 +43,7 @@ interface AxisPointerLabelParams {
 }
 
 const ZOOM_SYNC_KEY = "flyapp.flightDetails.zoomSync";
+const AUTO_FIT_KEY = "flyapp.flightDetails.autoFitSelection";
 
 const axisPointerLabelFormatter = (params: AxisPointerLabelParams) => {
   const v = params.value as any;
@@ -1336,7 +1337,7 @@ export function FlightDetailsRoute() {
     if (!win) return;
     if (isDragging) return; // während drag/preview nicht spammen
     zoomChartsToWindow();
-  }, [zoomSyncEnabled, isDragging, zoomChartsToWindow, win?.startSec, win?.endSec, win?.totalSec]);
+  }, [zoomSyncEnabled, isDragging, zoomChartsToWindow, win]);
 
   const resetChartsZoom = React.useCallback(() => {
     const maxT = chartData?.maxT ?? totalSec ?? 0;
@@ -1388,49 +1389,25 @@ export function FlightDetailsRoute() {
     | { kind: "value"; startValue: number; endValue: number }
     | { kind: "percent"; start: number; end: number };
 
-  function pickZoomRangeFromEvent(e: any): ZoomRange | null {
-    const b0 = e?.batch?.[0];
-    if (!b0) return null;
+  const setAutoFitSelection = useTimeWindowStore((s) => s.setAutoFitSelection);
 
-    const sv = b0.startValue;
-    const ev = b0.endValue;
-    if (typeof sv === "number" && Number.isFinite(sv) && typeof ev === "number" && Number.isFinite(ev)) {
-      return { kind: "value", startValue: sv, endValue: ev };
+  const [autoFitSelection, setAutoFitSelectionUi] = React.useState<boolean>(() => {
+    try {
+      const raw = localStorage.getItem(AUTO_FIT_KEY);
+      if (raw == null) return true; // default: an
+      return raw === "1";
+    } catch {
+      return true;
     }
+  });
 
-    const sp = b0.start;
-    const ep = b0.end;
-    if (typeof sp === "number" && Number.isFinite(sp) && typeof ep === "number" && Number.isFinite(ep)) {
-      return { kind: "percent", start: sp, end: ep };
-    }
-
-    return null;
-  }
-
-  function applyZoomRangeToChart(inst: any, kind: ChartKind, r: ZoomRange) {
-    if (!inst) return;
-
-    const idxs = kind === "alt" ? [0, 1] : [0]; // alt: inside + slider, vario/speed: nur inside
-
-    for (const dataZoomIndex of idxs) {
-      if (r.kind === "value") {
-        inst.dispatchAction?.({
-          type: "dataZoom",
-          dataZoomIndex,
-          startValue: r.startValue,
-          endValue: r.endValue,
-        });
-      } else {
-        inst.dispatchAction?.({
-          type: "dataZoom",
-          dataZoomIndex,
-          start: r.start,
-          end: r.end,
-        });
-      }
-    }
-  }
-
+  React.useEffect(() => {
+    // store + localstorage synchron halten
+    setAutoFitSelection(autoFitSelection);
+    try {
+      localStorage.setItem(AUTO_FIT_KEY, autoFitSelection ? "1" : "0");
+    } catch { }
+  }, [autoFitSelection, setAutoFitSelection]);
   const setPreviewLinesAll = React.useCallback(
     (a: number, b: number) => {
       const x1 = Math.min(a, b);
@@ -1726,12 +1703,56 @@ export function FlightDetailsRoute() {
   React.useEffect(() => {
     if (!zoomSyncEnabled) return;
 
+    const pickZoomRangeFromEvent = (e: any): ZoomRange | null => {
+      const b0 = e?.batch?.[0];
+      if (!b0) return null;
+
+      const sv = b0.startValue;
+      const ev = b0.endValue;
+      if (typeof sv === "number" && Number.isFinite(sv) && typeof ev === "number" && Number.isFinite(ev)) {
+        return { kind: "value", startValue: sv, endValue: ev };
+      }
+
+      const sp = b0.start;
+      const ep = b0.end;
+      if (typeof sp === "number" && Number.isFinite(sp) && typeof ep === "number" && Number.isFinite(ep)) {
+        return { kind: "percent", start: sp, end: ep };
+      }
+
+      return null;
+    }
+
+
+    const applyZoomRangeToChart = (inst: any, kind: ChartKind, r: ZoomRange) => {
+      if (!inst) return;
+
+      const idxs = kind === "alt" ? [0, 1] : [0]; // alt: inside + slider, vario/speed: nur inside
+
+      for (const dataZoomIndex of idxs) {
+        if (r.kind === "value") {
+          inst.dispatchAction?.({
+            type: "dataZoom",
+            dataZoomIndex,
+            startValue: r.startValue,
+            endValue: r.endValue,
+          });
+        } else {
+          inst.dispatchAction?.({
+            type: "dataZoom",
+            dataZoomIndex,
+            start: r.start,
+            end: r.end,
+          });
+        }
+      }
+    }
+
     const visibles = getVisibleCharts();
     if (visibles.length < 2) return;
 
     const cleanups: Array<() => void> = [];
 
-    for (const { kind, inst } of visibles) {
+    for (const { inst } of visibles) {
       const onDataZoom = (e: any) => {
         // während Range-Select / Preview nicht syncen (sonst fighten Events)
         if (isDragging) return;
@@ -1762,7 +1783,7 @@ export function FlightDetailsRoute() {
     return () => {
       for (const fn of cleanups) fn();
     };
-  }, [zoomSyncEnabled, getVisibleCharts, isDragging, applyZoomRangeToChart, pickZoomRangeFromEvent]);
+  }, [zoomSyncEnabled, getVisibleCharts, isDragging]);
 
 
   React.useEffect(() => {
@@ -1786,6 +1807,13 @@ export function FlightDetailsRoute() {
           </Button>
 
           <Group gap="md" align="center">
+
+            <Checkbox
+              label="Auto fit"
+              checked={autoFitSelection}
+              onChange={(e) => setAutoFitSelectionUi(e.currentTarget.checked)}
+            />
+
             <Checkbox
               label="Sync chart zoom"
               checked={zoomSyncEnabled}

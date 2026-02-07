@@ -18,6 +18,9 @@ type TimeWindowState = {
 
     isDragging: boolean;
     setDragging: (v: boolean) => void;
+
+    autoFitSelection: boolean;
+    setAutoFitSelection: (v: boolean) => void;
 };
 
 function normalizeClamp(r: IndexRange, maxIndex: number): IndexRange {
@@ -65,5 +68,8 @@ export const useTimeWindowStore = create<TimeWindowState>((set, get) => {
 
         isDragging: false,
         setDragging: (v) => set({ isDragging: v }),
+
+        autoFitSelection: true,
+        setAutoFitSelection: (v) => set({ autoFitSelection: v }),
     };
 });
