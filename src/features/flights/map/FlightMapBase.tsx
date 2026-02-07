@@ -8,7 +8,6 @@ import L, { type LatLngTuple, type LatLngBoundsExpression } from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { Box, Group, Text, RangeSlider } from "@mantine/core";
 import { useFlightHoverStore } from "../store/flightHover.store";
-import { useThrottledValue } from "@mantine/hooks";
 import { useTimeWindowStore } from "../store/timeWindow.store";
 
 import { MapContainer, TileLayer, Polyline, useMap, useMapEvents } from "react-leaflet";
@@ -112,7 +111,6 @@ function FitToTrackOnce({
     return null;
 }
 
-
 function ZoomWatcher({ onZoom }: { onZoom: (z: number) => void }) {
     const lastRef = React.useRef<number | null>(null);
 
@@ -164,7 +162,6 @@ function sliceFixesByWindow(fixes: FixPoint[], startSec: number, endSec: number)
     }
     return out;
 }
-
 
 function colorForVario(v: number) {
     const a = Math.abs(v);
@@ -234,7 +231,6 @@ function ensurePane(map: L.Map, name: string, zIndex: number) {
 
 /**
  * ✅ Active faint base track (full/lite) as imperative Leaflet layer.
- * This avoids Canvas renderer race / react-leaflet reconciliation during fast slider updates.
  */
 function ActiveTrackLayer({
     points,
@@ -255,7 +251,7 @@ function ActiveTrackLayer({
     const lineRef = React.useRef<L.Polyline | null>(null);
 
     React.useEffect(() => {
-        ensurePane(map, paneName, 650); // höher, damit garantiert über Tiles
+        ensurePane(map, paneName, 650);
 
         if (lineRef.current) return;
 
@@ -303,17 +299,10 @@ function ActiveTrackLayer({
     return null;
 }
 
-
 /**
  * ✅ Imperative hover marker
  */
-function HoverMarker({
-    fixes,
-    followEnabled,
-}: {
-    fixes: FixPoint[];
-    followEnabled: boolean;
-}) {
+function HoverMarker({ fixes, followEnabled }: { fixes: FixPoint[]; followEnabled: boolean }) {
     const map = useMap();
 
     const coreRef = React.useRef<L.CircleMarker | null>(null);
@@ -407,10 +396,7 @@ function HoverMarker({
 
             if (safeSE.x <= safeNW.x || safeSE.y <= safeNW.y) return;
 
-            const safeBounds = L.latLngBounds(
-                map.containerPointToLatLng(safeNW),
-                map.containerPointToLatLng(safeSE)
-            );
+            const safeBounds = L.latLngBounds(map.containerPointToLatLng(safeNW), map.containerPointToLatLng(safeSE));
 
             if (!safeBounds.contains(ll)) {
                 map.panTo(ll, { animate: true, duration: 0.25 });
@@ -424,40 +410,23 @@ function HoverMarker({
 }
 
 function dragStyleForZoomTopoGlow(z: number) {
-    // z ~ 10..16 typisch
     const t = clamp((z - 10) / 6, 0, 1);
 
-    // Kernlinie
-    const coreWeight = 7.0 - t * 3.5; // 7 → 3.5
-    const coreColor = "rgba(0, 255, 200, 0.95)"; // Neon-Cyan
+    const coreWeight = 7.0 - t * 3.5;
+    const coreColor = "rgba(0, 255, 200, 0.95)";
 
-    // Harte Kontrastkante
     const outlineWeight = coreWeight + 3.5;
     const outlineColor = "rgba(0, 0, 0, 0.9)";
 
-    // Soft Glow (Lichtschein)
     const glowWeight = outlineWeight + 6;
-    const glowColor = "rgba(0, 255, 200, 0.25)"; // gleiche Farbe, viel transparenter
+    const glowColor = "rgba(0, 255, 200, 0.25)";
 
     return {
-        glow: {
-            weight: glowWeight,
-            color: glowColor,
-            opacity: 1,
-        },
-        outline: {
-            weight: outlineWeight,
-            color: outlineColor,
-            opacity: 1,
-        },
-        core: {
-            weight: coreWeight,
-            color: coreColor,
-            opacity: 1,
-        },
+        glow: { weight: glowWeight, color: glowColor, opacity: 1 },
+        outline: { weight: outlineWeight, color: outlineColor, opacity: 1 },
+        core: { weight: coreWeight, color: coreColor, opacity: 1 },
     };
 }
-
 
 export function FlightMap({
     baseMap = "osm",
@@ -475,16 +444,14 @@ export function FlightMap({
     const hasTrack = fixesFull.length >= 2;
     const initialZoom = hasTrack ? 13 : 11;
 
-    const setWindow = useTimeWindowStore((s) => s.setWindowThrottled);
+    const win = useTimeWindowStore((s) => s.window);
+    const setWindowThrottled = useTimeWindowStore((s) => s.setWindowThrottled);
+    const setWindow = useTimeWindowStore((s) => s.setWindow);
+    const isDragging = useTimeWindowStore((s) => s.isDragging);
+    const setDragging = useTimeWindowStore((s) => s.setDragging);
 
     const [zoom, setZoom] = React.useState<number>(initialZoom);
     React.useEffect(() => setZoom(initialZoom), [initialZoom]);
-
-    const [isDragging, setIsDragging] = React.useState(false);
-
-    React.useEffect(() => {
-        setIsDragging(false);
-    }, [watchKey, fixesFull.length]);
 
     const fullPoints = React.useMemo(() => {
         const out = new Array<LatLngTuple>(fixesFull.length);
@@ -492,39 +459,19 @@ export function FlightMap({
         return out;
     }, [fixesFull]);
 
-    const baseFullPoints = fullPoints; // immer full als “Hintergrund”
-
+    const baseFullPoints = fullPoints;
 
     const totalSeconds = fixesFull.length ? fixesFull[fixesFull.length - 1].tSec : 0;
 
-    const [immediateValue, setImmediateValue] = React.useState<[number, number]>([0, 0]);
-    const rangeSec = useThrottledValue<[number, number]>(immediateValue, 150);
-
-    React.useEffect(() => {
-        setImmediateValue([0, totalSeconds]);
-    }, [totalSeconds]);
-
-    const [startSec, endSec] = React.useMemo(() => {
-        const maxSec = totalSeconds;
-
-        const a = clamp(rangeSec[0] ?? 0, 0, maxSec);
-        const b = clamp(rangeSec[1] ?? 0, 0, maxSec);
-
-        const start = Math.min(a, b);
-        const end = Math.max(a, b);
-        return [start, end];
-    }, [rangeSec, totalSeconds]);
+    // ✅ window is Source-of-Truth (from store), fallback to full range
+    const startSec = win?.startSec ?? 0;
+    const endSec = win?.endSec ?? totalSeconds;
 
     const dragWindowPoints = React.useMemo(() => {
         if (!isDragging) return [];
         const src = fixesLite && fixesLite.length >= 2 ? fixesLite : fixesFull;
         return sliceFixesByWindow(src, startSec, endSec);
     }, [isDragging, fixesLite, fixesFull, startSec, endSec]);
-
-
-    React.useEffect(() => {
-        setWindow({ startSec, endSec, totalSec: totalSeconds });
-    }, [setWindow, startSec, endSec, totalSeconds]);
 
     const { startIdx, endIdx } = React.useMemo(() => {
         if (fixesFull.length < 2) return { startIdx: 0, endIdx: 0 };
@@ -545,7 +492,6 @@ export function FlightMap({
     const { line, outlineExtra, outlineOpacity } = React.useMemo(() => weightsForZoom(zoom), [zoom]);
     const dragStyle = React.useMemo(() => dragStyleForZoomTopoGlow(zoom), [zoom]);
 
-
     const outlineWeight = line + outlineExtra;
     const OUTLINE = "rgba(0, 0, 0, 0.51)";
 
@@ -563,13 +509,33 @@ export function FlightMap({
                 </Text>
             </Group>
 
+            {/* ✅ Slider is bound to Store window, and sets Store dragging */}
             <RangeSlider
-                value={immediateValue}
+                value={[startSec, endSec]}
                 onChange={(v) => {
-                    setIsDragging(true);
-                    setImmediateValue([Math.min(v[0], v[1]), Math.max(v[0], v[1])]);
+                    const a = Math.min(v[0], v[1]);
+                    const b = Math.max(v[0], v[1]);
+
+                    setDragging(true);
+
+                    setWindowThrottled({
+                        startSec: a,
+                        endSec: b,
+                        totalSec: totalSeconds,
+                    });
                 }}
-                onChangeEnd={() => setIsDragging(false)}
+                onChangeEnd={(v) => {
+                    const a = Math.min(v[0], v[1]);
+                    const b = Math.max(v[0], v[1]);
+
+                    setWindow({
+                        startSec: a,
+                        endSec: b,
+                        totalSec: totalSeconds,
+                    });
+
+                    setDragging(false);
+                }}
                 min={0}
                 max={totalSeconds}
                 step={1}
@@ -582,7 +548,7 @@ export function FlightMap({
                 <MapContainer center={center} zoom={initialZoom} style={{ height: "100%", width: "100%" }} preferCanvas>
                     <TileLayer key={tile.key} url={tile.url} attribution={tile.attribution} />
 
-                    {/* ✅ Base track full/lite imperatively */}
+                    {/* ✅ Base track full imperatively */}
                     <ActiveTrackLayer
                         paneName="trackBase"
                         points={baseFullPoints}
@@ -592,26 +558,21 @@ export function FlightMap({
                         opacity={1}
                     />
 
-                    {/* While dragging: show lite window overlay (fast, visible) */}
+                    {/* While dragging: show lite window overlay */}
                     {isDragging && (
                         <>
-                            {/* Glow */}
                             <ActiveTrackLayer
                                 paneName="trackDrag"
                                 points={dragWindowPoints}
                                 watchKey={`${String(watchKey ?? "flight")}-drag-glow`}
                                 {...dragStyle.glow}
                             />
-
-                            {/* Outline */}
                             <ActiveTrackLayer
                                 paneName="trackDrag"
                                 points={dragWindowPoints}
                                 watchKey={`${String(watchKey ?? "flight")}-drag-outline`}
                                 {...dragStyle.outline}
                             />
-
-                            {/* Core */}
                             <ActiveTrackLayer
                                 paneName="trackDrag"
                                 points={dragWindowPoints}
@@ -620,9 +581,6 @@ export function FlightMap({
                             />
                         </>
                     )}
-
-
-
 
                     {/* ✅ Hover marker stays FULL */}
                     <HoverMarker fixes={fixesFull} followEnabled={followEnabled} />
