@@ -350,21 +350,13 @@ function ActiveTrackLayer({
     return null;
 }
 
-/**
- * ✅ Imperative hover marker
- */
 function HoverMarker({ fixes, followEnabled }: { fixes: FixPoint[]; followEnabled: boolean }) {
     const map = useMap();
 
     const coreRef = React.useRef<L.CircleMarker | null>(null);
     const haloRef = React.useRef<L.CircleMarker | null>(null);
 
-    const fixIndex = React.useMemo(() => {
-        const m = new Map<number, LatLngTuple>();
-        for (const f of fixes) m.set(Math.round(f.tSec), [f.lat, f.lon]);
-        return m;
-    }, [fixes]);
-
+    // follow flag as ref (unchanged)
     const followRef = React.useRef<boolean>(followEnabled);
     React.useEffect(() => {
         followRef.current = followEnabled;
@@ -372,27 +364,77 @@ function HoverMarker({ fixes, followEnabled }: { fixes: FixPoint[]; followEnable
 
     const lastPanAtRef = React.useRef(0);
 
+    // ✅ Smooth animation refs
+    const targetRef = React.useRef<LatLngTuple | null>(null);
+    const currentRef = React.useRef<LatLngTuple | null>(null);
+    const rafRef = React.useRef<number | null>(null);
+
+    // --- helpers ---
+    const clamp01 = (x: number) => (x < 0 ? 0 : x > 1 ? 1 : x);
+
+    const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
+
+    // ✅ Find interpolated position for arbitrary tSec
+    const positionAt = React.useCallback(
+        (tSec: number): LatLngTuple | null => {
+            const n = fixes.length;
+            if (n < 2) return null;
+
+            // clamp to ends
+            if (tSec <= fixes[0].tSec) return [fixes[0].lat, fixes[0].lon];
+            if (tSec >= fixes[n - 1].tSec) return [fixes[n - 1].lat, fixes[n - 1].lon];
+
+            // binary search: find i such that fixes[i].tSec <= t < fixes[i+1].tSec
+            let lo = 0;
+            let hi = n - 1;
+            while (lo < hi) {
+                const mid = (lo + hi + 1) >> 1;
+                if (fixes[mid].tSec <= tSec) lo = mid;
+                else hi = mid - 1;
+            }
+            const i = Math.min(lo, n - 2);
+            const a = fixes[i];
+            const b = fixes[i + 1];
+
+            const dt = b.tSec - a.tSec;
+            if (dt <= 0.000001) return [a.lat, a.lon];
+
+            const t = clamp01((tSec - a.tSec) / dt);
+
+            const lat = lerp(a.lat, b.lat, t);
+            const lon = lerp(a.lon, b.lon, t);
+
+            if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+            if (lat === 0 && lon === 0) return null;
+
+            return [lat, lon];
+        },
+        [fixes]
+    );
+
+    // ✅ marker creation (unchanged)
     React.useEffect(() => {
         if (coreRef.current || haloRef.current) return;
 
         const halo = L.circleMarker([0, 0], {
-            radius: 12,
+            radius: 18,                // größer
             weight: 0,
             opacity: 0,
             fillOpacity: 0,
-            fillColor: "#ffffff",
+            fillColor: "#00ffff",      // cyan glow
             interactive: false,
         });
 
         const core = L.circleMarker([0, 0], {
-            radius: 5,
-            weight: 2,
-            color: "#000000",
+            radius: 7,                 // größerer Kern
+            weight: 3,
+            color: "#000000",          // schwarzer Rand
             opacity: 0,
             fillOpacity: 0,
-            fillColor: "#ffffff",
+            fillColor: "#ffffff",      // weißer Kern
             interactive: false,
         });
+
 
         halo.addTo(map);
         core.addTo(map);
@@ -408,57 +450,119 @@ function HoverMarker({ fixes, followEnabled }: { fixes: FixPoint[]; followEnable
         };
     }, [map]);
 
-    React.useEffect(() => {
-        const unsub = useFlightHoverStore.subscribe((state) => {
-            const t = state.hoverTSec;
+    // ✅ smooth animation loop
+    const startRafIfNeeded = React.useCallback(() => {
+        if (rafRef.current != null) return;
+
+        const step = () => {
             const halo = haloRef.current;
             const core = coreRef.current;
-            if (!halo || !core) return;
+            const target = targetRef.current;
 
-            if (t == null) {
-                halo.setStyle({ opacity: 0, fillOpacity: 0 });
-                core.setStyle({ opacity: 0, fillOpacity: 0 });
+            if (!halo || !core) {
+                rafRef.current = null;
                 return;
             }
 
-            const pos = fixIndex.get(t);
-            if (!pos) return;
+            // if no target: hide markers and stop
+            if (!target) {
+                halo.setStyle({ opacity: 0, fillOpacity: 0 });
+                core.setStyle({ opacity: 0, fillOpacity: 0 });
+                currentRef.current = null;
+                rafRef.current = null;
+                return;
+            }
 
-            halo.setLatLng(pos);
-            core.setLatLng(pos);
+            // show markers
             halo.setStyle({ opacity: 1, fillOpacity: 0.35 });
             core.setStyle({ opacity: 1, fillOpacity: 1 });
 
-            if (!followRef.current) return;
+            // current init
+            let cur = currentRef.current;
+            if (!cur) cur = target;
 
-            const now = Date.now();
-            if (now - lastPanAtRef.current < 120) return;
-            lastPanAtRef.current = now;
+            // smooth toward target
+            const k = 0.18; // smoothing factor
+            const next: LatLngTuple = [lerp(cur[0], target[0], k), lerp(cur[1], target[1], k)];
 
-            const ll = L.latLng(pos[0], pos[1]);
+            currentRef.current = next;
+            halo.setLatLng(next);
+            core.setLatLng(next);
 
-            const marginPx = 40;
-            const b = map.getBounds();
-            const nw = map.latLngToContainerPoint(b.getNorthWest());
-            const se = map.latLngToContainerPoint(b.getSouthEast());
+            // follow-pan logic (same idea as before, just using smooth position)
+            if (followRef.current) {
+                const now = Date.now();
+                if (now - lastPanAtRef.current >= 120) {
+                    lastPanAtRef.current = now;
 
-            const safeNW = L.point(nw.x + marginPx, nw.y + marginPx);
-            const safeSE = L.point(se.x - marginPx, se.y - marginPx);
+                    const ll = L.latLng(next[0], next[1]);
 
-            if (safeSE.x <= safeNW.x || safeSE.y <= safeNW.y) return;
+                    const marginPx = 40;
+                    const b = map.getBounds();
+                    const nw = map.latLngToContainerPoint(b.getNorthWest());
+                    const se = map.latLngToContainerPoint(b.getSouthEast());
 
-            const safeBounds = L.latLngBounds(map.containerPointToLatLng(safeNW), map.containerPointToLatLng(safeSE));
+                    const safeNW = L.point(nw.x + marginPx, nw.y + marginPx);
+                    const safeSE = L.point(se.x - marginPx, se.y - marginPx);
 
-            if (!safeBounds.contains(ll)) {
-                map.panTo(ll, { animate: true, duration: 0.25 });
+                    if (safeSE.x > safeNW.x && safeSE.y > safeNW.y) {
+                        const safeBounds = L.latLngBounds(map.containerPointToLatLng(safeNW), map.containerPointToLatLng(safeSE));
+                        if (!safeBounds.contains(ll)) {
+                            map.panTo(ll, { animate: true, duration: 0.25 });
+                        }
+                    }
+                }
             }
+
+            // stop when close enough
+            const dLat = Math.abs(next[0] - target[0]);
+            const dLon = Math.abs(next[1] - target[1]);
+            const closeEnough = dLat < 1e-7 && dLon < 1e-7;
+
+            if (closeEnough) {
+                // snap to final + stop
+                currentRef.current = target;
+                halo.setLatLng(target);
+                core.setLatLng(target);
+                rafRef.current = null;
+                return;
+            }
+
+            rafRef.current = requestAnimationFrame(step);
+        };
+
+        rafRef.current = requestAnimationFrame(step);
+    }, [map]);
+
+    // ✅ subscribe to hover store: set target only
+    React.useEffect(() => {
+        const unsub = useFlightHoverStore.subscribe((state) => {
+            const t = state.hoverTSec;
+
+            if (t == null) {
+                targetRef.current = null;
+                // animation loop will hide + stop itself
+                startRafIfNeeded();
+                return;
+            }
+
+            const pos = positionAt(t);
+            if (!pos) return;
+
+            targetRef.current = pos;
+            startRafIfNeeded();
         });
 
-        return unsub;
-    }, [fixIndex, map]);
+        return () => {
+            unsub();
+            if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
+            rafRef.current = null;
+        };
+    }, [positionAt, startRafIfNeeded]);
 
     return null;
 }
+
 
 function dragStyleForZoomTopoGlow(z: number) {
     const t = clamp((z - 10) / 6, 0, 1);

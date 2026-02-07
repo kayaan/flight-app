@@ -542,6 +542,8 @@ export function FlightDetailsRoute() {
     }
   });
 
+
+
   React.useEffect(() => {
     try {
       localStorage.setItem(ZOOM_SYNC_KEY, zoomSyncEnabled ? "1" : "0");
@@ -1783,7 +1785,7 @@ export function FlightDetailsRoute() {
     return () => {
       for (const fn of cleanups) fn();
     };
-  }, [zoomSyncEnabled, getVisibleCharts, isDragging]);
+  }, [zoomSyncEnabled, getVisibleCharts, isDragging, chartsReadyTick]);
 
 
   React.useEffect(() => {
