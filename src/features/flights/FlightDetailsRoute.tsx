@@ -42,7 +42,6 @@ interface AxisPointerLabelParams {
   [key: string]: any;
 }
 
-
 const ZOOM_SYNC_KEY = "flyapp.flightDetails.zoomSync";
 
 const axisPointerLabelFormatter = (params: AxisPointerLabelParams) => {
@@ -102,8 +101,12 @@ const ALT_DATAZOOM = [
   { id: "dz_slider_alt", type: "slider", xAxisIndex: 0, height: 20, bottom: 8 },
 ] as const;
 
-const VARIO_DATAZOOM = [{ id: "dz_inside_vario", type: "inside", xAxisIndex: 0, moveOnMouseMove: true }] as const;
-const SPEED_DATAZOOM = [{ id: "dz_inside_speed", type: "inside", xAxisIndex: 0, moveOnMouseMove: true }] as const;
+const VARIO_DATAZOOM = [
+  { id: "dz_inside_vario", type: "inside", xAxisIndex: 0, moveOnMouseMove: true },
+] as const;
+const SPEED_DATAZOOM = [
+  { id: "dz_inside_speed", type: "inside", xAxisIndex: 0, moveOnMouseMove: true },
+] as const;
 
 function clamp(n: number, min: number, max: number) {
   return Math.min(max, Math.max(min, n));
@@ -608,7 +611,6 @@ export function FlightDetailsRoute() {
   const [error, setError] = React.useState<string | null>(null);
 
   const [windowSec] = React.useState(calculationWindow);
-
   const [baseMap, setBaseMap] = React.useState<BaseMap>("topo");
 
   const [syncEnabled, setSyncEnabled] = React.useState(true);
@@ -1206,7 +1208,8 @@ export function FlightDetailsRoute() {
             Segment Stats
           </Text>
           <Text size="xs" c="dimmed">
-            {fmtTime(Math.min(startSec, endSec))} → {fmtTime(Math.max(startSec, endSec))} / {fmtTime(totalSec)}
+            {fmtTime(Math.min(startSec, endSec))} → {fmtTime(Math.max(startSec, endSec))} /{" "}
+            {fmtTime(totalSec)}
           </Text>
         </Group>
 
@@ -1229,7 +1232,9 @@ export function FlightDetailsRoute() {
             <Text size="xs" c="dimmed">
               Alt (Start → Ende)
             </Text>
-            <Text fw={600}>{altStart == null || altEnd == null ? "—" : `${altStart} → ${altEnd} m`}</Text>
+            <Text fw={600}>
+              {altStart == null || altEnd == null ? "—" : `${altStart} → ${altEnd} m`}
+            </Text>
           </Box>
 
           <Box>
@@ -1250,7 +1255,9 @@ export function FlightDetailsRoute() {
             <Text size="xs" c="dimmed">
               Vario (Min / Max)
             </Text>
-            <Text fw={600}>{vMin == null || vMax == null ? "—" : `${vMin.toFixed(2)} / ${vMax.toFixed(2)} m/s`}</Text>
+            <Text fw={600}>
+              {vMin == null || vMax == null ? "—" : `${vMin.toFixed(2)} / ${vMax.toFixed(2)} m/s`}
+            </Text>
           </Box>
 
           <Box>
@@ -1309,6 +1316,7 @@ export function FlightDetailsRoute() {
     ze = clamp(ze, 0, maxT);
     if (ze <= zs) return;
 
+    // (unverändert gelassen, weil bei dir eh “kein Problem”)
     if (showAlt && altInstRef.current) {
       altInstRef.current.dispatchAction?.({ type: "dataZoom", dataZoomIndex: 0, startValue: zs, endValue: ze });
       altInstRef.current.dispatchAction?.({ type: "dataZoom", dataZoomIndex: 1, startValue: zs, endValue: ze });
@@ -1323,23 +1331,13 @@ export function FlightDetailsRoute() {
     }
   }, [chartData?.maxT, totalSec, startSec, endSec, showAlt, showVario, showSpeed]);
 
-
   React.useEffect(() => {
     if (!zoomSyncEnabled) return;
     if (!win) return;
     if (isDragging) return; // während drag/preview nicht spammen
-
     zoomChartsToWindow();
-  }, [
-    zoomSyncEnabled,
-    isDragging,
-    zoomChartsToWindow,
-    win?.startSec,
-    win?.endSec,
-    win?.totalSec,
-  ]);
+  }, [zoomSyncEnabled, isDragging, zoomChartsToWindow, win?.startSec, win?.endSec, win?.totalSec]);
 
-  // ✅ NEW: reset chart zoom to full range (needed because ECharts keeps dataZoom state)
   const resetChartsZoom = React.useCallback(() => {
     const maxT = chartData?.maxT ?? totalSec ?? 0;
     if (!Number.isFinite(maxT) || maxT <= 0) return;
@@ -1425,6 +1423,7 @@ export function FlightDetailsRoute() {
     }
   }, [getVisibleCharts]);
 
+  // ✅ FIX (minimal): during Shift-range-select disable inside-dataZoom so chart does NOT pan/move
   const setPanEnabled = React.useCallback((kind: ChartKind, enabled: boolean) => {
     const inst = kind === "alt" ? altInstRef.current : kind === "vario" ? varioInstRef.current : speedInstRef.current;
     if (!inst) return;
@@ -1434,7 +1433,14 @@ export function FlightDetailsRoute() {
     try {
       inst.setOption(
         {
-          dataZoom: [{ id: dzId, moveOnMouseMove: enabled }],
+          dataZoom: [
+            {
+              id: dzId,
+              // keep your existing config, but hard-disable interaction during selection
+              disabled: !enabled,
+              moveOnMouseMove: enabled,
+            },
+          ],
         },
         { silent: true }
       );
@@ -1451,8 +1457,6 @@ export function FlightDetailsRoute() {
     dragRef.current.owner = null;
 
     clearPreviewAll();
-
-    // ✅ IMPORTANT: also reset ECharts dataZoom state
     resetChartsZoom();
   }, [setWindow, setDragging, clearPreviewAll, resetChartsZoom]);
 
@@ -1461,10 +1465,12 @@ export function FlightDetailsRoute() {
     return !!e?.shiftKey;
   };
 
+  // ✅ FIX (minimal): stop event harder (prevents ECharts from also handling drag)
   const stopEvent = (ev: any) => {
     const e = ev?.event ?? ev;
     e?.preventDefault?.();
     e?.stopPropagation?.();
+    e?.stopImmediatePropagation?.();
   };
 
   const attachRangeSelect = React.useCallback(
@@ -1526,6 +1532,7 @@ export function FlightDetailsRoute() {
           totalSec: Number.isFinite(maxT) && maxT > 0 ? maxT : t,
         });
 
+        // ✅ key change: disable inside-dataZoom so the chart doesn't pan while selecting
         setPanEnabled(kind, false);
 
         setPreviewLinesAll(t, t);
@@ -1579,6 +1586,7 @@ export function FlightDetailsRoute() {
         const startT = dragRef.current.startT;
         const lastT = dragRef.current.lastT;
 
+        // ✅ restore inside-dataZoom
         setPanEnabled(kind, true);
 
         const maxT = chartData?.maxT ?? totalSec ?? 0;
@@ -1631,6 +1639,7 @@ export function FlightDetailsRoute() {
 
         setDragging(false);
 
+        // ✅ restore inside-dataZoom
         setPanEnabled(kind, true);
 
         clearPreviewAll();
@@ -1652,7 +1661,16 @@ export function FlightDetailsRoute() {
         zr.off("globalout", onGlobalOut);
       };
     },
-    [chartData?.maxT, totalSec, setDragging, setPanEnabled, setPreviewLinesAll, clearPreviewAll, setWindow, setWindowThrottled]
+    [
+      chartData?.maxT,
+      totalSec,
+      setDragging,
+      setPanEnabled,
+      setPreviewLinesAll,
+      clearPreviewAll,
+      setWindow,
+      setWindowThrottled,
+    ]
   );
 
   React.useEffect(() => {
@@ -1676,7 +1694,6 @@ export function FlightDetailsRoute() {
           </Button>
 
           <Group gap="md" align="center">
-
             <Checkbox
               label="Sync chart zoom"
               checked={zoomSyncEnabled}
