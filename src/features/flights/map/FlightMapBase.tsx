@@ -14,12 +14,37 @@ import { MapContainer, TileLayer, Polyline, useMap, useMapEvents } from "react-l
 
 export type BaseMap = "osm" | "topo";
 
+const FOLLOW_MAX_ZOOM = 14;     // wenn Follow an: nicht näher als das
+const FOLLOW_PAN_MS = 250;      // Dauer pan animation
+const FOLLOW_FIT_PADDING = 60;  // px padding beim fitBounds
+
+
 export type FixPoint = {
     tSec: number; // relative seconds (0..duration)
     lat: number;
     lon: number;
     altitudeM: number;
 };
+
+function boundsForRange(points: { lat: number; lng: number }[], from: number, to: number) {
+    let minLat = Infinity, minLng = Infinity, maxLat = -Infinity, maxLng = -Infinity;
+
+    for (let i = from; i <= to; i++) {
+        const p = points[i];
+        if (!p) continue;
+        if (p.lat < minLat) minLat = p.lat;
+        if (p.lng < minLng) minLng = p.lng;
+        if (p.lat > maxLat) maxLat = p.lat;
+        if (p.lng > maxLng) maxLng = p.lng;
+    }
+
+    if (!isFinite(minLat) || !isFinite(minLng) || !isFinite(maxLat) || !isFinite(maxLng)) return null;
+
+    return [
+        [minLat, minLng],
+        [maxLat, maxLng],
+    ] as [[number, number], [number, number]];
+}
 
 function clamp(n: number, min: number, max: number) {
     return Math.min(max, Math.max(min, n));
@@ -156,6 +181,46 @@ function FitToSelectionOrFull({
 
         map.fitBounds(targetBounds, { padding: [18, 18] });
     }, [map, fullBounds, windowBounds, win, isDragging, watchKey, autoFitSelection]);
+
+    return null;
+}
+
+
+function FollowZoomOutOnEnable({
+    followEnabled,
+    windowBounds,
+    fullBounds,
+}: {
+    followEnabled: boolean;
+    windowBounds: LatLngBoundsExpression | null;
+    fullBounds: LatLngBoundsExpression | null;
+}) {
+    const map = useMap();
+    const prevRef = React.useRef<boolean>(followEnabled);
+
+    React.useEffect(() => {
+        const was = prevRef.current;
+        prevRef.current = followEnabled;
+
+        // nur bei Transition false -> true
+        if (!followEnabled || was) return;
+
+        // 1) Zoom cap (falls zu nah)
+        const z = map.getZoom();
+        if (z > FOLLOW_MAX_ZOOM) {
+            map.setZoom(FOLLOW_MAX_ZOOM, { animate: true });
+        }
+
+        // 2) Optional: einmalig fitBounds mit maxZoom => stabiler als nur zoom setzen
+        const b = windowBounds ?? fullBounds;
+        if (b) {
+            map.fitBounds(b, {
+                padding: [FOLLOW_FIT_PADDING, FOLLOW_FIT_PADDING],
+                maxZoom: FOLLOW_MAX_ZOOM,
+                animate: true,
+            });
+        }
+    }, [followEnabled, map, windowBounds, fullBounds]);
 
     return null;
 }
@@ -352,6 +417,7 @@ function ActiveTrackLayer({
 
 function HoverMarker({ fixes, followEnabled }: { fixes: FixPoint[]; followEnabled: boolean }) {
     const map = useMap();
+    const lastZoomFixAtRef = React.useRef(0);
 
     const coreRef = React.useRef<L.CircleMarker | null>(null);
     const haloRef = React.useRef<L.CircleMarker | null>(null);
@@ -497,7 +563,7 @@ function HoverMarker({ fixes, followEnabled }: { fixes: FixPoint[]; followEnable
 
                     const ll = L.latLng(next[0], next[1]);
 
-                    const marginPx = 40;
+                    const marginPx = 80;
                     const b = map.getBounds();
                     const nw = map.latLngToContainerPoint(b.getNorthWest());
                     const se = map.latLngToContainerPoint(b.getSouthEast());
@@ -508,8 +574,33 @@ function HoverMarker({ fixes, followEnabled }: { fixes: FixPoint[]; followEnable
                     if (safeSE.x > safeNW.x && safeSE.y > safeNW.y) {
                         const safeBounds = L.latLngBounds(map.containerPointToLatLng(safeNW), map.containerPointToLatLng(safeSE));
                         if (!safeBounds.contains(ll)) {
-                            map.panTo(ll, { animate: true, duration: 0.25 });
+                            // 1) Wenn Marker wirklich aus dem Viewport raus ist (oder kurz davor),
+                            //    zoom-out minimal, so dass Marker wieder sichtbar ist.
+                            const viewB = map.getBounds();
+
+                            // "fast raus" Logik über Container-Points (robust bei verschiedenen Zooms)
+                            const p = map.latLngToContainerPoint(ll);
+                            const size = map.getSize();
+
+                            const edgePad = 12; // px: wie nah an den Rand, bevor wir zoom-out triggern
+                            const nearOrOutside =
+                                p.x < edgePad || p.y < edgePad || p.x > size.x - edgePad || p.y > size.y - edgePad;
+
+                            if (!viewB.contains(ll) || nearOrOutside) {
+                                // erweitere aktuelle Bounds um Marker und fitte – maxZoom = currentZoom => nur rauszoomen
+                                const b2 = viewB.extend(ll);
+
+                                map.fitBounds(b2, {
+                                    padding: [FOLLOW_FIT_PADDING, FOLLOW_FIT_PADDING],
+                                    maxZoom: map.getZoom(),       // ✅ nie reinzoomen
+                                    animate: true,
+                                });
+                            } else {
+                                // 2) Marker ist sichtbar, aber nicht in "safe zone" => sanft pan
+                                map.panTo(ll, { animate: true, duration: 0.25 });
+                            }
                         }
+
                     }
                 }
             }
@@ -780,6 +871,13 @@ export function FlightMap({
                     ))}
 
                     <ZoomWatcher onZoom={setZoom} />
+
+                    <FollowZoomOutOnEnable
+                        followEnabled={followEnabled}
+                        windowBounds={windowBounds}
+                        fullBounds={bounds}
+                    />
+
                     <MapAutoResize watchKey={watchKey} />
                     {/* <FitToTrackOnce bounds={bounds} watchKey={watchKey} /> */}
                     <FitToWindowOnCommit
