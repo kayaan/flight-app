@@ -397,6 +397,21 @@ function HoverMarker({ fixes, followEnabled }: { fixes: FixPoint[]; followEnable
     const mapTargetCenterRef = React.useRef<L.LatLng | null>(null);
     const mapCurrentCenterRef = React.useRef<L.LatLng | null>(null);
 
+    React.useEffect(() => {
+        const stopFollow = () => {
+            mapTargetCenterRef.current = null;
+            mapCurrentCenterRef.current = null;
+        };
+
+        map.on("dragstart", stopFollow);
+        map.on("zoomstart", stopFollow);
+
+        return () => {
+            map.off("dragstart", stopFollow);
+            map.off("zoomstart", stopFollow);
+        };
+    }, [map]);
+
     // --- helpers ---
     const clamp01 = (x: number) => (x < 0 ? 0 : x > 1 ? 1 : x);
 
@@ -559,6 +574,7 @@ function HoverMarker({ fixes, followEnabled }: { fixes: FixPoint[]; followEnable
                             const nearOrOutside =
                                 p.x < edgePad || p.y < edgePad || p.x > size.x - edgePad || p.y > size.y - edgePad;
 
+
                             if (!viewB.contains(ll) || nearOrOutside) {
                                 const z = map.getZoom();
                                 if (z > FOLLOW_MAX_ZOOM) {
@@ -567,10 +583,11 @@ function HoverMarker({ fixes, followEnabled }: { fixes: FixPoint[]; followEnable
 
                                 // erweitere aktuelle Bounds um Marker und fitte – maxZoom = currentZoom => nur rauszoomen
                                 const b2 = viewB.extend(ll);
+                                const zBefore = map.getZoom();
 
                                 map.fitBounds(b2, {
                                     padding: [FOLLOW_FIT_PADDING, FOLLOW_FIT_PADDING],
-                                    maxZoom: map.getZoom(), // ✅ nie reinzoomen
+                                    maxZoom: zBefore,
                                     animate: true,
                                 });
 
