@@ -91,26 +91,6 @@ function MapAutoResize({ watchKey }: { watchKey?: unknown }) {
     return null;
 }
 
-function FitToTrackOnce({
-    bounds,
-    watchKey,
-}: {
-    bounds: LatLngBoundsExpression | null;
-    watchKey?: unknown;
-}) {
-    const map = useMap();
-    const didRef = React.useRef<unknown>(null);
-
-    React.useEffect(() => {
-        if (!bounds) return;
-        if (didRef.current === watchKey) return;
-        didRef.current = watchKey;
-        map.fitBounds(bounds, { padding: [18, 18] });
-    }, [map, bounds, watchKey]);
-
-    return null;
-}
-
 function FitToWindowOnCommit({
     bounds,
     commitKey,
@@ -523,19 +503,12 @@ export function FlightMap({
     const storeDragging = useTimeWindowStore((s) => s.isDragging);
 
 
-    const windowPoints = React.useMemo(() => {
-        if (!win) return null;
-        const src = fixesLite && fixesLite.length >= 2 ? fixesLite : fixesFull;
-        const pts = sliceFixesByWindow(src, win.startSec, win.endSec);
-        return pts.length >= 2 ? pts : null;
-    }, [win, fixesLite, fixesFull, sliceFixesByWindow]);
-
     const windowBounds = React.useMemo(() => {
         if (!win) return null;
         const src = fixesLite && fixesLite.length >= 2 ? fixesLite : fixesFull;
         const pts = sliceFixesByWindow(src, win.startSec, win.endSec);
         return pts.length >= 2 ? computeBounds(pts) : null;
-    }, [win, fixesLite, fixesFull, sliceFixesByWindow]);
+    }, [win, fixesLite, fixesFull]);
 
     const [zoom, setZoom] = React.useState<number>(initialZoom);
     React.useEffect(() => setZoom(initialZoom), [initialZoom]);
@@ -588,9 +561,6 @@ export function FlightMap({
 
     const startPct = pct(startSec, totalSeconds);
     const endPct = pct(endSec, totalSeconds);
-
-    const autoFitSelection = useTimeWindowStore((s) => s.autoFitSelection);
-
 
     return (
         <Box style={{ display: "flex", flexDirection: "column", height: "100%" }}>
