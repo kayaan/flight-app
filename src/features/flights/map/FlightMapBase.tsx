@@ -8,7 +8,7 @@ import L, { type LatLngTuple, type LatLngBoundsExpression } from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { Box, Group, Text, RangeSlider } from "@mantine/core";
 import { useFlightHoverStore } from "../store/flightHover.store";
-import { useTimeWindowStore } from "../store/timeWindow.store";
+import { useTimeWindowStore, type TimeWindow } from "../store/timeWindow.store";
 
 import { MapContainer, TileLayer, Polyline, useMap, useMapEvents } from "react-leaflet";
 
@@ -110,6 +110,69 @@ function FitToTrackOnce({
 
     return null;
 }
+
+
+function FitToWindowOnCommit({
+    bounds,
+    commitKey,
+    enabled,
+}: {
+    bounds: LatLngBoundsExpression | null;
+    commitKey: string;
+    enabled: boolean;
+}) {
+    const map = useMap();
+    const lastKeyRef = React.useRef<string>("");
+
+    React.useEffect(() => {
+        if (!enabled) return;
+        if (!bounds) return;
+
+        if (lastKeyRef.current === commitKey) return;
+        lastKeyRef.current = commitKey;
+
+        map.fitBounds(bounds, { padding: [18, 18] });
+    }, [map, bounds, commitKey, enabled]);
+
+    return null;
+}
+
+
+function FitToSelectionOrFull({
+    fullBounds,
+    windowBounds,
+    win,
+    isDragging,
+    watchKey,
+}: {
+    fullBounds: LatLngBoundsExpression | null;
+    windowBounds: LatLngBoundsExpression | null;
+    win: TimeWindow | null;
+    isDragging: boolean;
+    watchKey?: unknown;
+}) {
+    const map = useMap();
+    const lastKeyRef = React.useRef<string>("");
+
+    React.useEffect(() => {
+        if (isDragging) return;
+
+        const targetBounds = win ? windowBounds : fullBounds;
+        if (!targetBounds) return;
+
+        const key = win
+            ? `win:${Math.round(win.startSec)}-${Math.round(win.endSec)}:${String(watchKey ?? "")}`
+            : `full:${String(watchKey ?? "")}`;
+
+        if (lastKeyRef.current === key) return;
+        lastKeyRef.current = key;
+
+        map.fitBounds(targetBounds, { padding: [18, 18] });
+    }, [map, fullBounds, windowBounds, win, isDragging, watchKey]);
+
+    return null;
+}
+
 
 function ZoomWatcher({ onZoom }: { onZoom: (z: number) => void }) {
     const lastRef = React.useRef<number | null>(null);
@@ -449,6 +512,22 @@ export function FlightMap({
     const setWindow = useTimeWindowStore((s) => s.setWindow);
     const isDragging = useTimeWindowStore((s) => s.isDragging);
     const setDragging = useTimeWindowStore((s) => s.setDragging);
+    const storeDragging = useTimeWindowStore((s) => s.isDragging);
+
+
+    const windowPoints = React.useMemo(() => {
+        if (!win) return null;
+        const src = fixesLite && fixesLite.length >= 2 ? fixesLite : fixesFull;
+        const pts = sliceFixesByWindow(src, win.startSec, win.endSec);
+        return pts.length >= 2 ? pts : null;
+    }, [win, fixesLite, fixesFull, sliceFixesByWindow]);
+
+    const windowBounds = React.useMemo(() => {
+        if (!win) return null;
+        const src = fixesLite && fixesLite.length >= 2 ? fixesLite : fixesFull;
+        const pts = sliceFixesByWindow(src, win.startSec, win.endSec);
+        return pts.length >= 2 ? computeBounds(pts) : null;
+    }, [win, fixesLite, fixesFull, sliceFixesByWindow]);
 
     const [zoom, setZoom] = React.useState<number>(initialZoom);
     React.useEffect(() => setZoom(initialZoom), [initialZoom]);
@@ -489,6 +568,8 @@ export function FlightMap({
     const center: LatLngTuple = fullPoints.length ? fullPoints[0] : [48.1372, 11.5756];
     const bounds = React.useMemo(() => computeBounds(fullPoints), [fullPoints]);
 
+
+
     const { line, outlineExtra, outlineOpacity } = React.useMemo(() => weightsForZoom(zoom), [zoom]);
     const dragStyle = React.useMemo(() => dragStyleForZoomTopoGlow(zoom), [zoom]);
 
@@ -499,6 +580,7 @@ export function FlightMap({
 
     const startPct = pct(startSec, totalSeconds);
     const endPct = pct(endSec, totalSeconds);
+
 
     return (
         <Box style={{ display: "flex", flexDirection: "column", height: "100%" }}>
@@ -615,7 +697,23 @@ export function FlightMap({
 
                     <ZoomWatcher onZoom={setZoom} />
                     <MapAutoResize watchKey={watchKey} />
-                    <FitToTrackOnce bounds={bounds} watchKey={watchKey} />
+                    {/* <FitToTrackOnce bounds={bounds} watchKey={watchKey} /> */}
+                    <FitToWindowOnCommit
+                        bounds={windowBounds}
+                        enabled={!!win && !storeDragging}
+                        commitKey={
+                            win
+                                ? `${Math.round(win.startSec)}-${Math.round(win.endSec)}-${String(watchKey ?? "")}`
+                                : `none-${String(watchKey ?? "")}`
+                        }
+                    />
+                    <FitToSelectionOrFull
+                        fullBounds={bounds}
+                        windowBounds={windowBounds}
+                        win={win}
+                        isDragging={storeDragging}
+                        watchKey={watchKey}
+                    />
                 </MapContainer>
             </Box>
         </Box>

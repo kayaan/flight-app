@@ -1,4 +1,4 @@
-// flights.$id.tsx
+// src/features/flights/FlightDetailsRoute.tsx
 import * as React from "react";
 import { useParams } from "@tanstack/react-router";
 import {
@@ -41,6 +41,9 @@ interface AxisPointerLabelParams {
   }>;
   [key: string]: any;
 }
+
+
+const ZOOM_SYNC_KEY = "flyapp.flightDetails.zoomSync";
 
 const axisPointerLabelFormatter = (params: AxisPointerLabelParams) => {
   const v = params.value as any;
@@ -525,6 +528,22 @@ export function FlightDetailsRoute() {
     }
   });
 
+  const [zoomSyncEnabled, setZoomSyncEnabled] = React.useState<boolean>(() => {
+    try {
+      const raw = localStorage.getItem(ZOOM_SYNC_KEY);
+      if (raw == null) return true; // default: an
+      return raw === "1";
+    } catch {
+      return true;
+    }
+  });
+
+  React.useEffect(() => {
+    try {
+      localStorage.setItem(ZOOM_SYNC_KEY, zoomSyncEnabled ? "1" : "0");
+    } catch { }
+  }, [zoomSyncEnabled]);
+
   React.useEffect(() => {
     try {
       localStorage.setItem(FOLLOW_KEY, followEnabled ? "1" : "0");
@@ -796,6 +815,7 @@ export function FlightDetailsRoute() {
   const win = useTimeWindowStore((s) => s.window);
   const setWindow = useTimeWindowStore((s) => s.setWindow);
   const setDragging = useTimeWindowStore((s) => s.setDragging);
+  const isDragging = useTimeWindowStore((s) => s.isDragging);
   const setWindowThrottled = useTimeWindowStore((s) => s.setWindowThrottled);
 
   const startSec = win?.startSec ?? 0;
@@ -1303,6 +1323,22 @@ export function FlightDetailsRoute() {
     }
   }, [chartData?.maxT, totalSec, startSec, endSec, showAlt, showVario, showSpeed]);
 
+
+  React.useEffect(() => {
+    if (!zoomSyncEnabled) return;
+    if (!win) return;
+    if (isDragging) return; // während drag/preview nicht spammen
+
+    zoomChartsToWindow();
+  }, [
+    zoomSyncEnabled,
+    isDragging,
+    zoomChartsToWindow,
+    win?.startSec,
+    win?.endSec,
+    win?.totalSec,
+  ]);
+
   // ✅ NEW: reset chart zoom to full range (needed because ECharts keeps dataZoom state)
   const resetChartsZoom = React.useCallback(() => {
     const maxT = chartData?.maxT ?? totalSec ?? 0;
@@ -1616,7 +1652,7 @@ export function FlightDetailsRoute() {
         zr.off("globalout", onGlobalOut);
       };
     },
-    [chartData?.maxT, totalSec, setDragging, setPanEnabled, setPreviewLinesAll, clearPreviewAll, setWindow]
+    [chartData?.maxT, totalSec, setDragging, setPanEnabled, setPreviewLinesAll, clearPreviewAll, setWindow, setWindowThrottled]
   );
 
   React.useEffect(() => {
@@ -1640,6 +1676,13 @@ export function FlightDetailsRoute() {
           </Button>
 
           <Group gap="md" align="center">
+
+            <Checkbox
+              label="Sync chart zoom"
+              checked={zoomSyncEnabled}
+              onChange={(e) => setZoomSyncEnabled(e.currentTarget.checked)}
+            />
+
             <Button size="xs" variant="light" onClick={resetSelection} disabled={!win}>
               Reset selection
             </Button>
