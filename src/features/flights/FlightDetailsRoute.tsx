@@ -1381,6 +1381,56 @@ export function FlightDetailsRoute() {
     return out;
   }, [showAlt, showVario, showSpeed]);
 
+
+  const zoomSyncLockRef = React.useRef(false);
+
+  type ZoomRange =
+    | { kind: "value"; startValue: number; endValue: number }
+    | { kind: "percent"; start: number; end: number };
+
+  function pickZoomRangeFromEvent(e: any): ZoomRange | null {
+    const b0 = e?.batch?.[0];
+    if (!b0) return null;
+
+    const sv = b0.startValue;
+    const ev = b0.endValue;
+    if (typeof sv === "number" && Number.isFinite(sv) && typeof ev === "number" && Number.isFinite(ev)) {
+      return { kind: "value", startValue: sv, endValue: ev };
+    }
+
+    const sp = b0.start;
+    const ep = b0.end;
+    if (typeof sp === "number" && Number.isFinite(sp) && typeof ep === "number" && Number.isFinite(ep)) {
+      return { kind: "percent", start: sp, end: ep };
+    }
+
+    return null;
+  }
+
+  function applyZoomRangeToChart(inst: any, kind: ChartKind, r: ZoomRange) {
+    if (!inst) return;
+
+    const idxs = kind === "alt" ? [0, 1] : [0]; // alt: inside + slider, vario/speed: nur inside
+
+    for (const dataZoomIndex of idxs) {
+      if (r.kind === "value") {
+        inst.dispatchAction?.({
+          type: "dataZoom",
+          dataZoomIndex,
+          startValue: r.startValue,
+          endValue: r.endValue,
+        });
+      } else {
+        inst.dispatchAction?.({
+          type: "dataZoom",
+          dataZoomIndex,
+          start: r.start,
+          end: r.end,
+        });
+      }
+    }
+  }
+
   const setPreviewLinesAll = React.useCallback(
     (a: number, b: number) => {
       const x1 = Math.min(a, b);
@@ -1672,6 +1722,48 @@ export function FlightDetailsRoute() {
       setWindowThrottled,
     ]
   );
+
+  React.useEffect(() => {
+    if (!zoomSyncEnabled) return;
+
+    const visibles = getVisibleCharts();
+    if (visibles.length < 2) return;
+
+    const cleanups: Array<() => void> = [];
+
+    for (const { kind, inst } of visibles) {
+      const onDataZoom = (e: any) => {
+        // während Range-Select / Preview nicht syncen (sonst fighten Events)
+        if (isDragging) return;
+
+        if (zoomSyncLockRef.current) return;
+
+        const r = pickZoomRangeFromEvent(e);
+        if (!r) return;
+
+        zoomSyncLockRef.current = true;
+        try {
+          for (const other of visibles) {
+            if (other.inst === inst) continue;
+            applyZoomRangeToChart(other.inst, other.kind, r);
+          }
+        } finally {
+          // lock im nächsten Tick lösen (sonst immediate feedback loop)
+          queueMicrotask(() => {
+            zoomSyncLockRef.current = false;
+          });
+        }
+      };
+
+      inst.on?.("dataZoom", onDataZoom);
+      cleanups.push(() => inst.off?.("dataZoom", onDataZoom));
+    }
+
+    return () => {
+      for (const fn of cleanups) fn();
+    };
+  }, [zoomSyncEnabled, getVisibleCharts, isDragging, applyZoomRangeToChart, pickZoomRangeFromEvent]);
+
 
   React.useEffect(() => {
     const cleanups: Array<(() => void) | undefined> = [];
