@@ -596,8 +596,31 @@ function HoverMarker({ fixes, followEnabled }: { fixes: FixPoint[]; followEnable
                                 mapCurrentCenterRef.current = null;
                             } else {
                                 // 2) Marker ist sichtbar, aber nicht in "safe zone":
-                                //    statt panTo: setze Map-Target => Smooth Map Center Lerp
-                                mapTargetCenterRef.current = ll;
+                                //    XCTrack-Feeling: verschiebe Center nur um die nötigen Pixel,
+                                //    damit der Marker wieder INS Safe-Rechteck fällt (nicht zentrieren).
+                                const pt = map.latLngToContainerPoint(ll);
+
+                                // clamp marker point into safe rect
+                                const clampedX = clamp(pt.x, safeNW.x, safeSE.x);
+                                const clampedY = clamp(pt.y, safeNW.y, safeSE.y);
+
+                                // delta = wie weit marker außerhalb safe rect ist (in px)
+                                const dx = pt.x - clampedX;
+                                const dy = pt.y - clampedY;
+
+                                // wenn wirklich außerhalb: center in Gegenrichtung verschieben
+                                if (dx !== 0 || dy !== 0) {
+                                    const centerPt = map.latLngToContainerPoint(map.getCenter());
+                                    const targetCenterPt = L.point(centerPt.x + dx, centerPt.y + dy);
+                                    const targetCenter = map.containerPointToLatLng(targetCenterPt);
+
+                                    mapTargetCenterRef.current = targetCenter;
+                                } else {
+                                    // eigentlich safe -> stop
+                                    mapTargetCenterRef.current = null;
+                                    mapCurrentCenterRef.current = null;
+                                }
+
                             }
                         } else {
                             // Marker wieder "safe" => stop map follow lerp
