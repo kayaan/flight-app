@@ -1,42 +1,49 @@
-import type { FixPoint } from "../../igc";
+export type FixPoint = {
+    tSec: number;
+    iso: string;
+    lat: number;
+    lon: number;
+    altitudeM: number;
+};
 
 export type ClimbPhase = {
     startIdx: number;
-    endIdx: number;
-
+    endIdx: number; // endet am Peak
     startAltM: number;
     peakAltM: number;
-    endAltM: number;
-
     gainM: number;
-    dropFromPeakM: number;
-
-    // optional helpers
     peakIdx: number;
 };
 
 export type ClimbDetectConfig = {
-    /** segment is only valid if total gain >= this */
-    minGainM: number;
-
-    /** segment candidate becomes "active" once gain from start reaches this */
+    /** Segment wird erst aktiv, wenn Gain vom Start >= startGainM */
     startGainM: number;
 
-    /** end segment if we drop from peak by at least this many meters */
-    dropAbsM: number;
+    /** Segment wird nur behalten, wenn Gain >= minGainM */
+    minGainM: number;
 
-    /** also end segment if we drop below peak*(1-dropPct) (useful for large climbs) */
-    dropPct: number; // e.g. 0.10 = 10%
+    /**
+     * Drop-Kriterium als Anteil des Segment-Gains:
+     * dropM = (peakAlt - startAlt) * dropPct
+     * Ende wenn currentAlt <= peakAlt - dropM
+     *
+     * Beispiel: start 1700, peak 2300 => gain 600
+     * dropPct 0.10 => dropM 60 => Ende bei <= 2240
+     */
+    dropPct: number; // z.B. 0.10
 
-    /** reject tiny segments by point count */
+    /** Optional: Mindest-Drop in Metern (gegen winzige Gains). */
+    minDropAbsM: number; // z.B. 25..60
+
+    /** Optional gegen Mikrosequenzen: min. Anzahl Punkte */
     minLenPts: number;
 };
 
 export const defaultClimbDetectConfig: ClimbDetectConfig = {
-    minGainM: 50,
     startGainM: 15,
-    dropAbsM: 40,
+    minGainM: 50,
     dropPct: 0.10,
+    minDropAbsM: 40,
     minLenPts: 25,
 };
 
@@ -50,34 +57,31 @@ export function detectClimbPhases(
     const out: ClimbPhase[] = [];
 
     let inSeg = false;
+
     let startIdx = 0;
     let startAlt = fixes[0].altitudeM;
 
     let peakIdx = 0;
     let peakAlt = startAlt;
 
-    const endIfDropBeyond = (alt: number) => {
-        const pctThreshold = peakAlt * (1 - c.dropPct);
-        const absThreshold = peakAlt - c.dropAbsM;
-        // end if below either threshold (i.e. significant drop)
-        return alt < absThreshold || alt < pctThreshold;
+    const dropThresholdAlt = () => {
+        const gain = Math.max(0, peakAlt - startAlt);
+        const dropM = Math.max(c.minDropAbsM, gain * c.dropPct);
+        return peakAlt - dropM;
     };
 
     for (let i = 1; i < fixes.length; i++) {
         const alt = fixes[i].altitudeM;
-
         if (!Number.isFinite(alt)) continue;
 
         if (!inSeg) {
-            // Candidate start is current startIdx/startAlt.
-            // Activate segment only once we have a real upward move from start.
+            // Segment aktivieren erst bei echtem Anstieg
             if (alt - startAlt >= c.startGainM) {
                 inSeg = true;
-                peakAlt = alt;
                 peakIdx = i;
+                peakAlt = alt;
             } else {
-                // Keep moving start forward to avoid anchoring to stale lows/highs.
-                // Heuristic: if we go lower than startAlt, reset baseline.
+                // Baseline nach unten nachziehen
                 if (alt < startAlt) {
                     startIdx = i;
                     startAlt = alt;
@@ -86,17 +90,16 @@ export function detectClimbPhases(
             continue;
         }
 
-        // in segment: track peak
+        // Peak updaten
         if (alt > peakAlt) {
             peakAlt = alt;
             peakIdx = i;
         }
 
-        // check end condition: big drop from peak
-        if (endIfDropBeyond(alt)) {
-            const endIdx = i;
-
-            const endAlt = fixes[endIdx].altitudeM;
+        // ✅ Abbruch: Drop relativ zum Segment-Gain (plus minDropAbsM)
+        if (alt <= dropThresholdAlt()) {
+            // Segment endet am Peak
+            const endIdx = peakIdx;
             const gainM = peakAlt - startAlt;
             const lenPts = endIdx - startIdx + 1;
 
@@ -106,27 +109,26 @@ export function detectClimbPhases(
                     endIdx,
                     startAltM: startAlt,
                     peakAltM: peakAlt,
-                    endAltM: endAlt,
                     gainM,
-                    dropFromPeakM: peakAlt - endAlt,
                     peakIdx,
                 });
             }
 
-            // reset for next segment:
-            // new baseline begins at current point (we are after a drop)
+            // Peak-Backtracking: neu am Peak starten
             inSeg = false;
-            startIdx = i;
-            startAlt = alt;
-            peakIdx = i;
-            peakAlt = alt;
+            startIdx = peakIdx;
+            startAlt = peakAlt;
+
+            peakIdx = startIdx;
+            peakAlt = startAlt;
+
+            // (wir laufen bei i weiter; baseline kann durch weitere Drops weiter runtergezogen werden)
         }
     }
 
-    // Optional: tail segment (if we end while still "in segment")
+    // Tail: Segment endet am Peak
     if (inSeg) {
-        const endIdx = fixes.length - 1;
-        const endAlt = fixes[endIdx].altitudeM;
+        const endIdx = peakIdx;
         const gainM = peakAlt - startAlt;
         const lenPts = endIdx - startIdx + 1;
 
@@ -136,9 +138,7 @@ export function detectClimbPhases(
                 endIdx,
                 startAltM: startAlt,
                 peakAltM: peakAlt,
-                endAltM: endAlt,
                 gainM,
-                dropFromPeakM: peakAlt - endAlt,
                 peakIdx,
             });
         }

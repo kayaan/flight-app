@@ -28,6 +28,8 @@ import { useFlightHoverStore } from "./store/flightHover.store";
 import { useTimeWindowStore } from "./store/timeWindow.store";
 import { useWindConfigStore } from "./analysis/wind/wind.config.store";
 import { useWindEstimate } from "./analysis/wind/useWindEstimate";
+import { detectClimbPhases } from "./analysis/turns/detectClimbPhases";
+import { detectThermalCirclesInClimbs } from "./analysis/turns/detectThermalCircles";
 
 interface AxisPointerLabelParams {
   value: number | string | Date;
@@ -275,6 +277,43 @@ function upperBoundSeries(points: SeriesPoint[], tSec: number) {
   return Math.max(0, lo - 1);
 }
 
+function buildThermalMarkLines(thermals: Array<{ startSec: number; endSec: number }>) {
+  const palette = [
+    "#ff6b6b",
+    "#ffd43b",
+    "#69db7c",
+    "#4dabf7",
+    "#da77f2",
+    "#ffa94d",
+    "#40c057",
+    "#748ffc",
+  ];
+
+  const data: any[] = [];
+  for (let i = 0; i < thermals.length; i++) {
+    const t = thermals[i];
+    const c = palette[i % palette.length];
+    data.push({
+      xAxis: t.startSec,
+      lineStyle: { color: c, width: 2, type: "solid", opacity: 0.9 },
+      label: { show: false },
+      symbol: "none",
+    });
+    data.push({
+      xAxis: t.endSec,
+      lineStyle: { color: c, width: 2, type: "solid", opacity: 0.9 },
+      label: { show: false },
+      symbol: "none",
+    });
+  }
+  return {
+    symbol: "none",
+    label: { show: false },
+    data,
+  };
+}
+
+
 type SegmentStats = {
   hasSegment: boolean;
 
@@ -510,6 +549,20 @@ function fmtSigned(n: number, digits = 0) {
   return `${s}${n.toFixed(digits)}`;
 }
 
+function colorForClimbIndex(i: number) {
+  const colors = [
+    "#ff006e",
+    "#fb5607",
+    "#ffbe0b",
+    "#8338ec",
+    "#3a86ff",
+    "#06d6a0",
+    "#ef476f",
+    "#118ab2",
+  ];
+  return colors[i % colors.length];
+}
+
 type ChartKind = "alt" | "vario" | "speed";
 
 export function FlightDetailsRoute() {
@@ -726,6 +779,75 @@ export function FlightDetailsRoute() {
     return { series, fixesFull: fixesFullRel };
   }, [fixesFull, windowSec]);
 
+  const climbs = React.useMemo(() => {
+    const f = computed?.fixesFull ?? null;
+    if (!f) return [];
+    return detectClimbPhases(f, {
+      startGainM: 15,
+      minGainM: 150,
+      dropPct: 0.25,
+      minDropAbsM: 40,
+      minLenPts: 25,
+    });
+  }, [computed?.fixesFull]);
+
+  const climbMarkLineData = React.useMemo(() => {
+    const f = computed?.fixesFull;
+    if (!f || !climbs.length) return [];
+
+    const data: any[] = [];
+
+    for (let i = 0; i < climbs.length; i++) {
+      const c = climbs[i];
+
+      const startSec = f[c.startIdx]?.tSec;
+      const endSec = f[c.endIdx]?.tSec;
+      if (!Number.isFinite(startSec) || !Number.isFinite(endSec)) continue;
+
+      const color = colorForClimbIndex(i);
+
+      // Start line
+      data.push({
+        xAxis: startSec,
+        lineStyle: { color, width: 2, opacity: 0.9 },
+        label: { show: false },
+      });
+
+      // End line
+      data.push({
+        xAxis: endSec,
+        lineStyle: { color, width: 2, opacity: 0.9 },
+        label: { show: false },
+      });
+    }
+
+    return data;
+  }, [computed?.fixesFull, climbs]);
+
+
+
+
+  const thermals = React.useMemo(() => {
+    const f = computed?.fixesFull ?? null;
+    if (!f) return [];
+    if (!climbs.length) return [];
+    return detectThermalCirclesInClimbs(f, climbs, {
+      windowPts: 60,
+      stepPts: 8,
+      minTurnDeg: 300,
+      minRadiusM: 30,
+      maxRadiusM: 100,
+      maxRadiusSlackM: 50,
+      maxRadiusRelStd: 0.35,
+      minSignConsistency: 0.70,
+      minAltGainM: 30,
+      mergeGapPts: 10,
+      backtrackPts: 6,
+    });
+  }, [computed?.fixesFull, climbs]);
+
+
+
   const config = useWindConfigStore((s) => s.config);
 
 
@@ -919,9 +1041,32 @@ export function FlightDetailsRoute() {
             },
           },
         },
+        {
+          id: "__climbs",
+          name: "__climbs",
+          type: "line",
+          data: [],
+          silent: true,
+          markLine: {
+            symbol: "none",
+            label: { show: false },
+            animation: false,
+            silent: true,
+            data: climbMarkLineData,
+          },
+        },
+
+        {
+          id: "__thermals",
+          name: "__thermals",
+          type: "line",
+          data: [],
+          silent: true,
+          markLine: buildThermalMarkLines(thermals),
+        },
       ],
     };
-  }, [chartData, baseOption, windowMarkLine]);
+  }, [chartData, baseOption, windowMarkLine, climbMarkLineData, thermals]);
 
   const varioOption = React.useMemo(() => {
     if (!chartData) return {};

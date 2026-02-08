@@ -16,6 +16,9 @@ import { useWindEstimate } from "../analysis/wind/useWindEstimate";
 import { WindLayer } from "./layers/windLayer";
 import { detectClimbPhases } from "../analysis/turns/detectClimbPhases";
 import type { FixPoint } from "../igc";
+import { detectThermalCirclesInClimbs } from "../analysis/turns/detectThermalCircles";
+import { ThermalWindArrowsLayer } from "./layers/ThermalWindArrowsLayer";
+import { ThermalCirclesLayer } from "./layers/ThermalCirclesLayer";
 
 export type BaseMap = "osm" | "topo";
 
@@ -868,13 +871,36 @@ export function FlightMap({
     const climbs = React.useMemo(() => {
         if (!fixesFull) return [];
         return detectClimbPhases(fixesFull, {
-            minGainM: 50,
             startGainM: 15,
-            dropAbsM: 40,
-            dropPct: 0.10,
+            minGainM: 150,
+            dropPct: 0.25,
+            minDropAbsM: 40,   // ✅ richtiger Name
             minLenPts: 25,
         });
     }, [fixesFull]);
+
+    const thermals = React.useMemo(() => {
+        if (!fixesFull) return [];
+        if (!climbs.length) return [];
+
+        return detectThermalCirclesInClimbs(fixesFull, climbs, {
+            windowPts: 60,          // 60s bei 1Hz
+            stepPts: 8,
+            minTurnDeg: 300,
+            minRadiusM: 30,
+            maxRadiusM: 110,
+            maxRadiusSlackM: 60,    // wichtig für versetzte Thermiken + noisy tracks
+            maxRadiusRelStd: 0.35,
+            minSignConsistency: 0.70,
+            minAltGainM: 30,
+            mergeGapPts: 10,
+            backtrackPts: 6,
+        });
+    }, [fixesFull, climbs]);
+
+
+
+
 
     return (
         <Box style={{ display: "flex", flexDirection: "column", height: "100%" }}>
@@ -934,17 +960,26 @@ export function FlightMap({
                         opacity={1}
                     />
 
-                    {!isDragging && climbs.length > 0 && (
+
+                    <ThermalCirclesLayer
+                        fixesFull={fixesFull}
+                        thermals={thermals}
+                        minQuality={0.20}
+                        minPts={25}
+                        simplifyEveryN={2}
+                    />
+
+                    {/* {!isDragging && climbs.length > 0 && (
                         <ClimbPhasesLayer
                             paneName="climbPhases"
                             fixes={fixesFull}
                             climbs={climbs}
                             watchKey={`${String(watchKey ?? "flight")}-climbs-${climbs.length}`}
                             weight={Math.max(3.2, line * 1.25)} // sichtbar über base track
-                            color="rgba(255,140,0,0.95)"
+                            color="rgba(255, 0, 0, 0.95)"
                             opacity={0.95}
                         />
-                    )}
+                    )} */}
 
                     {/* While dragging: show lite window overlay */}
                     {isDragging && (
