@@ -11,11 +11,13 @@ import { useFlightHoverStore } from "../store/flightHover.store";
 import { useTimeWindowStore, type TimeWindow } from "../store/timeWindow.store";
 
 import { MapContainer, TileLayer, Polyline, useMap, useMapEvents } from "react-leaflet";
+import { useWindConfigStore } from "../analysis/wind/wind.config.store";
+import { useWindEstimate } from "../analysis/wind/useWindEstimate";
+import { WindLayer } from "./layers/windLayer";
 
 export type BaseMap = "osm" | "topo";
 
 const FOLLOW_MAX_ZOOM = 14; // wenn Follow an: nicht näher als das
-const FOLLOW_PAN_MS = 250; // Dauer (nicht mehr panTo, aber bleibt als "feel" Referenz)
 const FOLLOW_FIT_PADDING = 60; // px padding beim fitBounds
 
 export type FixPoint = {
@@ -25,28 +27,6 @@ export type FixPoint = {
     altitudeM: number;
 };
 
-function boundsForRange(points: { lat: number; lng: number }[], from: number, to: number) {
-    let minLat = Infinity,
-        minLng = Infinity,
-        maxLat = -Infinity,
-        maxLng = -Infinity;
-
-    for (let i = from; i <= to; i++) {
-        const p = points[i];
-        if (!p) continue;
-        if (p.lat < minLat) minLat = p.lat;
-        if (p.lng < minLng) minLng = p.lng;
-        if (p.lat > maxLat) maxLat = p.lat;
-        if (p.lng > maxLng) maxLng = p.lng;
-    }
-
-    if (!isFinite(minLat) || !isFinite(minLng) || !isFinite(maxLat) || !isFinite(maxLng)) return null;
-
-    return [
-        [minLat, minLng],
-        [maxLat, maxLng],
-    ] as [[number, number], [number, number]];
-}
 
 function clamp(n: number, min: number, max: number) {
     return Math.min(max, Math.max(min, n));
@@ -740,6 +720,23 @@ export function FlightMap({
     const setDragging = useTimeWindowStore((s) => s.setDragging);
     const storeDragging = useTimeWindowStore((s) => s.isDragging);
 
+    const windConfig = useWindConfigStore((s) => s.config);
+
+    // Adapter: FixPoint -> WindFix (avoid type coupling)
+    const windFixes = React.useMemo(
+        () => fixesFull.map(({ tSec, lat, lon }) => ({ tSec, lat, lon })),
+        [fixesFull]
+    );
+
+    // Adapter: TimeWindow -> WindRange (avoid type coupling)
+    const windRange = React.useMemo(() => {
+        if (!win) return null;
+        return { startSec: win.startSec, endSec: win.endSec };
+    }, [win]);
+
+    const wind = useWindEstimate(windFixes, windRange!, windConfig);
+
+
     const windowBounds = React.useMemo(() => {
         if (!win) return null;
         const src = fixesLite && fixesLite.length >= 2 ? fixesLite : fixesFull;
@@ -881,6 +878,15 @@ export function FlightMap({
 
                     {/* ✅ Hover marker stays FULL */}
                     <HoverMarker fixes={fixesFull} followEnabled={followEnabled} />
+
+                    <WindLayer
+                        fixes={windFixes}
+                        range={windRange}
+                        windowEstimate={wind.window}
+                        opposite180Estimate={wind.opposite180}
+                        arrowScaleSec={500}
+                        minQuality={0.15}
+                    />
 
                     {/* Colored chunks only when NOT dragging */}
                     {colorChunks.map((ch, i) => (

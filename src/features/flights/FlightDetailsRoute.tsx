@@ -26,6 +26,8 @@ import type { SeriesPoint } from "./igc";
 import { FlightMap, type FixPoint, type BaseMap } from "./map/FlightMapBase";
 import { useFlightHoverStore } from "./store/flightHover.store";
 import { useTimeWindowStore } from "./store/timeWindow.store";
+import { useWindConfigStore } from "./analysis/wind/wind.config.store";
+import { useWindEstimate } from "./analysis/wind/useWindEstimate";
 
 interface AxisPointerLabelParams {
   value: number | string | Date;
@@ -724,6 +726,10 @@ export function FlightDetailsRoute() {
     return { series, fixesFull: fixesFullRel };
   }, [fixesFull, windowSec]);
 
+  const config = useWindConfigStore((s) => s.config);
+
+
+
   const [fixesLite, setFixesLite] = React.useState<FixPoint[] | null>(null);
   const rdpJobRef = React.useRef(0);
 
@@ -826,6 +832,21 @@ export function FlightDetailsRoute() {
   const startSec = win?.startSec ?? 0;
   const endSec = win?.endSec ?? 0;
   const totalSec = win?.totalSec ?? (chartData?.maxT ?? 0);
+
+  const windFixes = React.useMemo(() => {
+    const src = fixesFull ?? [];
+    return src.map(({ tSec, lat, lon }) => ({ tSec, lat, lon }));
+  }, [fixesFull]);
+
+  const windRange = React.useMemo(() => {
+    if (!win) return null;
+    return {
+      startSec: win.startSec,
+      endSec: win.endSec,
+    };
+  }, [win]);
+
+  const wind = useWindEstimate(windFixes, windRange!, config);
 
   const windowMarkLine = React.useMemo(() => {
     if (!win) return undefined;

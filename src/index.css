@@ -69,3 +69,16 @@ button:focus-visible {
     background-color: #f9f9f9;
   }
 }
+
+.wind-label div {
+  background: rgba(255, 255, 255, 0.85);
+  /* light background */
+  color: #000;
+  /* black text */
+  padding: 4px 8px;
+  border-radius: 8px;
+  font-weight: 600;
+  font-size: 15px;
+  white-space: nowrap;
+  border: 1px solid rgba(0, 0, 0, 0.15);
+}
