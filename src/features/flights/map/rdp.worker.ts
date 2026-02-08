@@ -2,12 +2,8 @@
 // Web Worker: RDP simplification for FixPoint[] (lat/lon) with epsilon in meters
 /// <reference lib="webworker" />
 
-export type FixPoint = {
-    tSec: number;
-    lat: number;
-    lon: number;
-    altitudeM: number;
-};
+import type { FixPoint } from "../igc";
+
 
 type InMsg = {
     jobId: number;

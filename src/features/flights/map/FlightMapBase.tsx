@@ -14,18 +14,13 @@ import { MapContainer, TileLayer, Polyline, useMap, useMapEvents } from "react-l
 import { useWindConfigStore } from "../analysis/wind/wind.config.store";
 import { useWindEstimate } from "../analysis/wind/useWindEstimate";
 import { WindLayer } from "./layers/windLayer";
+import { detectClimbPhases } from "../analysis/turns/detectClimbPhases";
+import type { FixPoint } from "../igc";
 
 export type BaseMap = "osm" | "topo";
 
 const FOLLOW_MAX_ZOOM = 14; // wenn Follow an: nicht näher als das
 const FOLLOW_FIT_PADDING = 60; // px padding beim fitBounds
-
-export type FixPoint = {
-    tSec: number; // relative seconds (0..duration)
-    lat: number;
-    lon: number;
-    altitudeM: number;
-};
 
 
 function clamp(n: number, min: number, max: number) {
@@ -353,6 +348,82 @@ function ActiveTrackLayer({
 
     return null;
 }
+
+function ClimbPhasesLayer({
+    fixes,
+    climbs,
+    paneName,
+    weight,
+    watchKey,
+    color = "rgba(255,140,0,0.95)",
+    opacity = 0.95,
+}: {
+    fixes: FixPoint[];
+    climbs: Array<{ startIdx: number; endIdx: number }>;
+    paneName: string;
+    weight: number;
+    watchKey?: unknown;
+    color?: string;
+    opacity?: number;
+}) {
+    const map = useMap();
+    const groupRef = React.useRef<L.LayerGroup | null>(null);
+
+    React.useEffect(() => {
+        ensurePane(map, paneName, 700); // über base track (650), unter chunks (Polyline React)
+        if (groupRef.current) return;
+
+        const g = L.layerGroup({ pane: paneName } as any);
+        g.addTo(map);
+        groupRef.current = g;
+
+        return () => {
+            g.remove();
+            groupRef.current = null;
+        };
+    }, [map, paneName]);
+
+    React.useEffect(() => {
+        const g = groupRef.current;
+        if (!g) return;
+
+        g.clearLayers();
+
+        if (!fixes || fixes.length < 2) return;
+        if (!climbs || climbs.length === 0) return;
+
+        for (let ci = 0; ci < climbs.length; ci++) {
+            const c = climbs[ci];
+            const s = clamp(c.startIdx, 0, fixes.length - 2);
+            const e = clamp(c.endIdx, s + 1, fixes.length - 1);
+
+            const pts: LatLngTuple[] = [];
+            for (let i = s; i <= e; i++) {
+                const { lat, lon } = fixes[i];
+                if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
+                if (lat === 0 && lon === 0) continue;
+                pts.push([lat, lon]);
+            }
+
+            if (pts.length < 2) continue;
+
+            const line = L.polyline(pts, {
+                pane: paneName,
+                color,
+                weight,
+                opacity,
+                lineCap: "round",
+                lineJoin: "round",
+                interactive: false,
+            });
+
+            g.addLayer(line);
+        }
+    }, [fixes, climbs, paneName, weight, color, opacity, watchKey]);
+
+    return null;
+}
+
 
 function HoverMarker({ fixes, followEnabled }: { fixes: FixPoint[]; followEnabled: boolean }) {
     const map = useMap();
@@ -794,6 +865,17 @@ export function FlightMap({
     const startPct = pct(startSec, totalSeconds);
     const endPct = pct(endSec, totalSeconds);
 
+    const climbs = React.useMemo(() => {
+        if (!fixesFull) return [];
+        return detectClimbPhases(fixesFull, {
+            minGainM: 50,
+            startGainM: 15,
+            dropAbsM: 40,
+            dropPct: 0.10,
+            minLenPts: 25,
+        });
+    }, [fixesFull]);
+
     return (
         <Box style={{ display: "flex", flexDirection: "column", height: "100%" }}>
             <Group justify="space-between" mb="xs">
@@ -851,6 +933,18 @@ export function FlightMap({
                         color="rgba(120,120,130,0.55)"
                         opacity={1}
                     />
+
+                    {!isDragging && climbs.length > 0 && (
+                        <ClimbPhasesLayer
+                            paneName="climbPhases"
+                            fixes={fixesFull}
+                            climbs={climbs}
+                            watchKey={`${String(watchKey ?? "flight")}-climbs-${climbs.length}`}
+                            weight={Math.max(3.2, line * 1.25)} // sichtbar über base track
+                            color="rgba(255,140,0,0.95)"
+                            opacity={0.95}
+                        />
+                    )}
 
                     {/* While dragging: show lite window overlay */}
                     {isDragging && (
