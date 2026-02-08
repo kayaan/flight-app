@@ -798,12 +798,12 @@ export function FlightMap({
         return detectThermalCirclesInClimbs(fixesFull, climbs, {
             windowPts: 40, // was 60 -> better for short/weak circles
             stepPts: 6, // was 8 -> denser scan
-            minTurnDeg: 330, // accept "almost one full turn"
+            minTurnDeg: 270, // accept "almost one full turn"
             minRadiusM: 20, // was 30
             maxRadiusM: 160, // was 110
             maxRadiusSlackM: 90, // was 60
             maxRadiusRelStd: 0.5, // was 0.35
-            minSignConsistency: 0.55, // was 0.70 (less strict)
+            minSignConsistency: 0.45, // was 0.70 (less strict)
             minAltGainM: 8, // was 30 (weak thermals OK)
             mergeGapPts: 12, // was 10
             backtrackPts: 8, // was 6
@@ -872,7 +872,7 @@ export function FlightMap({
                         fixesFull={fixesFull}
                         thermals={thermals}
                         minQuality={0.05} // was 0.20
-                        minPts={10} // was 25
+                        minPts={6} // was 25
                         simplifyEveryN={1} // was 2 (don’t kill small circles)
                     />
 
