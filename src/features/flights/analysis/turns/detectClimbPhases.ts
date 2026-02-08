@@ -1,10 +1,4 @@
-export type FixPoint = {
-    tSec: number;
-    iso: string;
-    lat: number;
-    lon: number;
-    altitudeM: number;
-};
+import type { FixPoint } from "../../igc";
 
 export type ClimbPhase = {
     startIdx: number;

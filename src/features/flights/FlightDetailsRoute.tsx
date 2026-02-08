@@ -21,15 +21,12 @@ import type { FlightRecordDetails } from "./flights.types";
 import { buildFlightSeries, calculationWindow, parseIgcFixes } from "./igc/igc.series";
 import { useAuthStore } from "../auth/store/auth.store";
 import { flightApi } from "./flights.api";
-import type { SeriesPoint } from "./igc";
+import type { FixPoint, SeriesPoint } from "./igc";
 
-import { FlightMap, type FixPoint, type BaseMap } from "./map/FlightMapBase";
+import { FlightMap, type BaseMap } from "./map/FlightMapBase";
 import { useFlightHoverStore } from "./store/flightHover.store";
 import { useTimeWindowStore } from "./store/timeWindow.store";
-import { useWindConfigStore } from "./analysis/wind/wind.config.store";
-import { useWindEstimate } from "./analysis/wind/useWindEstimate";
 import { detectClimbPhases } from "./analysis/turns/detectClimbPhases";
-import { detectThermalCirclesInClimbs } from "./analysis/turns/detectThermalCircles";
 
 interface AxisPointerLabelParams {
   value: number | string | Date;
@@ -276,43 +273,6 @@ function upperBoundSeries(points: SeriesPoint[], tSec: number) {
   }
   return Math.max(0, lo - 1);
 }
-
-function buildThermalMarkLines(thermals: Array<{ startSec: number; endSec: number }>) {
-  const palette = [
-    "#ff6b6b",
-    "#ffd43b",
-    "#69db7c",
-    "#4dabf7",
-    "#da77f2",
-    "#ffa94d",
-    "#40c057",
-    "#748ffc",
-  ];
-
-  const data: any[] = [];
-  for (let i = 0; i < thermals.length; i++) {
-    const t = thermals[i];
-    const c = palette[i % palette.length];
-    data.push({
-      xAxis: t.startSec,
-      lineStyle: { color: c, width: 2, type: "solid", opacity: 0.9 },
-      label: { show: false },
-      symbol: "none",
-    });
-    data.push({
-      xAxis: t.endSec,
-      lineStyle: { color: c, width: 2, type: "solid", opacity: 0.9 },
-      label: { show: false },
-      symbol: "none",
-    });
-  }
-  return {
-    symbol: "none",
-    label: { show: false },
-    data,
-  };
-}
-
 
 type SegmentStats = {
   hasSegment: boolean;
@@ -772,6 +732,7 @@ export function FlightDetailsRoute() {
     const fixesFullRel: FixPoint[] = fixesFull.map((f) => ({
       tSec: f.tSec - t0,
       lat: f.lat,
+      iso: f.iso,
       lon: f.lon,
       altitudeM: f.altitudeM,
     }));
@@ -823,34 +784,6 @@ export function FlightDetailsRoute() {
 
     return data;
   }, [computed?.fixesFull, climbs]);
-
-
-
-
-  const thermals = React.useMemo(() => {
-    const f = computed?.fixesFull ?? null;
-    if (!f) return [];
-    if (!climbs.length) return [];
-    return detectThermalCirclesInClimbs(f, climbs, {
-      windowPts: 60,
-      stepPts: 8,
-      minTurnDeg: 300,
-      minRadiusM: 30,
-      maxRadiusM: 100,
-      maxRadiusSlackM: 50,
-      maxRadiusRelStd: 0.35,
-      minSignConsistency: 0.70,
-      minAltGainM: 30,
-      mergeGapPts: 10,
-      backtrackPts: 6,
-    });
-  }, [computed?.fixesFull, climbs]);
-
-
-
-  const config = useWindConfigStore((s) => s.config);
-
-
 
   const [fixesLite, setFixesLite] = React.useState<FixPoint[] | null>(null);
   const rdpJobRef = React.useRef(0);
@@ -955,21 +888,6 @@ export function FlightDetailsRoute() {
   const endSec = win?.endSec ?? 0;
   const totalSec = win?.totalSec ?? (chartData?.maxT ?? 0);
 
-  const windFixes = React.useMemo(() => {
-    const src = fixesFull ?? [];
-    return src.map(({ tSec, lat, lon }) => ({ tSec, lat, lon }));
-  }, [fixesFull]);
-
-  const windRange = React.useMemo(() => {
-    if (!win) return null;
-    return {
-      startSec: win.startSec,
-      endSec: win.endSec,
-    };
-  }, [win]);
-
-  const wind = useWindEstimate(windFixes, windRange!, config);
-
   const windowMarkLine = React.useMemo(() => {
     if (!win) return undefined;
     return buildWindowMarkLine(startSec, endSec, totalSec);
@@ -1055,18 +973,9 @@ export function FlightDetailsRoute() {
             data: climbMarkLineData,
           },
         },
-
-        {
-          id: "__thermals",
-          name: "__thermals",
-          type: "line",
-          data: [],
-          silent: true,
-          markLine: buildThermalMarkLines(thermals),
-        },
       ],
     };
-  }, [chartData, baseOption, windowMarkLine, climbMarkLineData, thermals]);
+  }, [chartData, baseOption, windowMarkLine, climbMarkLineData]);
 
   const varioOption = React.useMemo(() => {
     if (!chartData) return {};

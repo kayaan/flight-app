@@ -17,14 +17,12 @@ import { WindLayer } from "./layers/windLayer";
 import { detectClimbPhases } from "../analysis/turns/detectClimbPhases";
 import type { FixPoint } from "../igc";
 import { detectThermalCirclesInClimbs } from "../analysis/turns/detectThermalCircles";
-import { ThermalWindArrowsLayer } from "./layers/ThermalWindArrowsLayer";
 import { ThermalCirclesLayer } from "./layers/ThermalCirclesLayer";
 
 export type BaseMap = "osm" | "topo";
 
 const FOLLOW_MAX_ZOOM = 14; // wenn Follow an: nicht näher als das
 const FOLLOW_FIT_PADDING = 60; // px padding beim fitBounds
-
 
 function clamp(n: number, min: number, max: number) {
     return Math.min(max, Math.max(min, n));
@@ -352,82 +350,6 @@ function ActiveTrackLayer({
     return null;
 }
 
-function ClimbPhasesLayer({
-    fixes,
-    climbs,
-    paneName,
-    weight,
-    watchKey,
-    color = "rgba(255,140,0,0.95)",
-    opacity = 0.95,
-}: {
-    fixes: FixPoint[];
-    climbs: Array<{ startIdx: number; endIdx: number }>;
-    paneName: string;
-    weight: number;
-    watchKey?: unknown;
-    color?: string;
-    opacity?: number;
-}) {
-    const map = useMap();
-    const groupRef = React.useRef<L.LayerGroup | null>(null);
-
-    React.useEffect(() => {
-        ensurePane(map, paneName, 700); // über base track (650), unter chunks (Polyline React)
-        if (groupRef.current) return;
-
-        const g = L.layerGroup({ pane: paneName } as any);
-        g.addTo(map);
-        groupRef.current = g;
-
-        return () => {
-            g.remove();
-            groupRef.current = null;
-        };
-    }, [map, paneName]);
-
-    React.useEffect(() => {
-        const g = groupRef.current;
-        if (!g) return;
-
-        g.clearLayers();
-
-        if (!fixes || fixes.length < 2) return;
-        if (!climbs || climbs.length === 0) return;
-
-        for (let ci = 0; ci < climbs.length; ci++) {
-            const c = climbs[ci];
-            const s = clamp(c.startIdx, 0, fixes.length - 2);
-            const e = clamp(c.endIdx, s + 1, fixes.length - 1);
-
-            const pts: LatLngTuple[] = [];
-            for (let i = s; i <= e; i++) {
-                const { lat, lon } = fixes[i];
-                if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
-                if (lat === 0 && lon === 0) continue;
-                pts.push([lat, lon]);
-            }
-
-            if (pts.length < 2) continue;
-
-            const line = L.polyline(pts, {
-                pane: paneName,
-                color,
-                weight,
-                opacity,
-                lineCap: "round",
-                lineJoin: "round",
-                interactive: false,
-            });
-
-            g.addLayer(line);
-        }
-    }, [fixes, climbs, paneName, weight, color, opacity, watchKey]);
-
-    return null;
-}
-
-
 function HoverMarker({ fixes, followEnabled }: { fixes: FixPoint[]; followEnabled: boolean }) {
     const map = useMap();
 
@@ -513,11 +435,16 @@ function HoverMarker({ fixes, followEnabled }: { fixes: FixPoint[]; followEnable
         [fixes]
     );
 
-    // ✅ marker creation (unchanged)
+    // ✅ marker creation (UPDATED: hoverPane + high zIndex so it's ALWAYS in front)
     React.useEffect(() => {
         if (coreRef.current || haloRef.current) return;
 
+        // 🔥 Put hover marker into its own pane above everything (also above Canvas panes)
+        // Using a high zIndex because you use preferCanvas and some layers may create their own panes.
+        ensurePane(map, "hoverPane", 5000);
+
         const halo = L.circleMarker([0, 0], {
+            pane: "hoverPane", // ✅
             radius: 18, // größer
             weight: 0,
             opacity: 0,
@@ -527,6 +454,7 @@ function HoverMarker({ fixes, followEnabled }: { fixes: FixPoint[]; followEnable
         });
 
         const core = L.circleMarker([0, 0], {
+            pane: "hoverPane", // ✅
             radius: 7, // größerer Kern
             weight: 3,
             color: "#000000", // schwarzer Rand
@@ -538,6 +466,10 @@ function HoverMarker({ fixes, followEnabled }: { fixes: FixPoint[]; followEnable
 
         halo.addTo(map);
         core.addTo(map);
+
+        // ✅ extra safety: ensure front within the same pane
+        halo.bringToFront();
+        core.bringToFront();
 
         haloRef.current = halo;
         coreRef.current = core;
@@ -582,6 +514,10 @@ function HoverMarker({ fixes, followEnabled }: { fixes: FixPoint[]; followEnable
             halo.setStyle({ opacity: 1, fillOpacity: 0.35 });
             core.setStyle({ opacity: 1, fillOpacity: 1 });
 
+            // (optional but cheap) keep on top even if other layers call bringToFront
+            halo.bringToFront();
+            core.bringToFront();
+
             // current init
             let cur = currentRef.current;
             if (!cur) cur = target;
@@ -616,18 +552,14 @@ function HoverMarker({ fixes, followEnabled }: { fixes: FixPoint[]; followEnable
                         );
 
                         if (!safeBounds.contains(ll)) {
-                            // 1) Wenn Marker wirklich aus dem Viewport raus ist (oder kurz davor),
-                            //    zoom-out minimal, so dass Marker wieder sichtbar ist.
                             const viewB = map.getBounds();
 
-                            // "fast raus" Logik über Container-Points (robust bei verschiedenen Zooms)
                             const p = map.latLngToContainerPoint(ll);
                             const size = map.getSize();
 
-                            const edgePad = 12; // px: wie nah an den Rand, bevor wir zoom-out triggern
+                            const edgePad = 12; // px
                             const nearOrOutside =
                                 p.x < edgePad || p.y < edgePad || p.x > size.x - edgePad || p.y > size.y - edgePad;
-
 
                             if (!viewB.contains(ll) || nearOrOutside) {
                                 const z = map.getZoom();
@@ -635,7 +567,6 @@ function HoverMarker({ fixes, followEnabled }: { fixes: FixPoint[]; followEnable
                                     map.setZoom(FOLLOW_MAX_ZOOM, { animate: true });
                                 }
 
-                                // erweitere aktuelle Bounds um Marker und fitte – maxZoom = currentZoom => nur rauszoomen
                                 const b2 = viewB.extend(ll);
                                 const zBefore = map.getZoom();
 
@@ -645,24 +576,17 @@ function HoverMarker({ fixes, followEnabled }: { fixes: FixPoint[]; followEnable
                                     animate: true,
                                 });
 
-                                // nach fitBounds: kein center-lerp "gegen" das Fit
                                 mapTargetCenterRef.current = null;
                                 mapCurrentCenterRef.current = null;
                             } else {
-                                // 2) Marker ist sichtbar, aber nicht in "safe zone":
-                                //    XCTrack-Feeling: verschiebe Center nur um die nötigen Pixel,
-                                //    damit der Marker wieder INS Safe-Rechteck fällt (nicht zentrieren).
                                 const pt = map.latLngToContainerPoint(ll);
 
-                                // clamp marker point into safe rect
                                 const clampedX = clamp(pt.x, safeNW.x, safeSE.x);
                                 const clampedY = clamp(pt.y, safeNW.y, safeSE.y);
 
-                                // delta = wie weit marker außerhalb safe rect ist (in px)
                                 const dx = pt.x - clampedX;
                                 const dy = pt.y - clampedY;
 
-                                // wenn wirklich außerhalb: center in Gegenrichtung verschieben
                                 if (dx !== 0 || dy !== 0) {
                                     const centerPt = map.latLngToContainerPoint(map.getCenter());
                                     const targetCenterPt = L.point(centerPt.x + dx, centerPt.y + dy);
@@ -670,21 +594,17 @@ function HoverMarker({ fixes, followEnabled }: { fixes: FixPoint[]; followEnable
 
                                     mapTargetCenterRef.current = targetCenter;
                                 } else {
-                                    // eigentlich safe -> stop
                                     mapTargetCenterRef.current = null;
                                     mapCurrentCenterRef.current = null;
                                 }
-
                             }
                         } else {
-                            // Marker wieder "safe" => stop map follow lerp
                             mapTargetCenterRef.current = null;
                             mapCurrentCenterRef.current = null;
                         }
                     }
                 }
             } else {
-                // follow aus => stop map follow lerp
                 mapTargetCenterRef.current = null;
                 mapCurrentCenterRef.current = null;
             }
@@ -699,7 +619,6 @@ function HoverMarker({ fixes, followEnabled }: { fixes: FixPoint[]; followEnable
 
                 mapCurrentCenterRef.current = nextC;
 
-                // IMPORTANT: no Leaflet animation; we animate ourselves via RAF
                 map.setView(nextC, map.getZoom(), { animate: false });
             }
 
@@ -810,7 +729,6 @@ export function FlightMap({
 
     const wind = useWindEstimate(windFixes, windRange!, windConfig);
 
-
     const windowBounds = React.useMemo(() => {
         if (!win) return null;
         const src = fixesLite && fixesLite.length >= 2 ? fixesLite : fixesFull;
@@ -869,27 +787,27 @@ export function FlightMap({
     const endPct = pct(endSec, totalSeconds);
 
     const climbs = React.useMemo(() => {
-        if (!fixesFull) return [];
+        if (!fixesFull?.length) return [];
         return detectClimbPhases(fixesFull, {
             startGainM: 15,
             minGainM: 150,
             dropPct: 0.25,
-            minDropAbsM: 40,   // ✅ richtiger Name
+            minDropAbsM: 40,
             minLenPts: 25,
         });
     }, [fixesFull]);
 
     const thermals = React.useMemo(() => {
-        if (!fixesFull) return [];
+        if (!fixesFull?.length) return [];
         if (!climbs.length) return [];
 
         return detectThermalCirclesInClimbs(fixesFull, climbs, {
-            windowPts: 60,          // 60s bei 1Hz
+            windowPts: 60,
             stepPts: 8,
             minTurnDeg: 300,
             minRadiusM: 30,
             maxRadiusM: 110,
-            maxRadiusSlackM: 60,    // wichtig für versetzte Thermiken + noisy tracks
+            maxRadiusSlackM: 60,
             maxRadiusRelStd: 0.35,
             minSignConsistency: 0.70,
             minAltGainM: 30,
@@ -897,10 +815,6 @@ export function FlightMap({
             backtrackPts: 6,
         });
     }, [fixesFull, climbs]);
-
-
-
-
 
     return (
         <Box style={{ display: "flex", flexDirection: "column", height: "100%" }}>
@@ -960,7 +874,6 @@ export function FlightMap({
                         opacity={1}
                     />
 
-
                     <ThermalCirclesLayer
                         fixesFull={fixesFull}
                         thermals={thermals}
@@ -968,18 +881,6 @@ export function FlightMap({
                         minPts={25}
                         simplifyEveryN={2}
                     />
-
-                    {/* {!isDragging && climbs.length > 0 && (
-                        <ClimbPhasesLayer
-                            paneName="climbPhases"
-                            fixes={fixesFull}
-                            climbs={climbs}
-                            watchKey={`${String(watchKey ?? "flight")}-climbs-${climbs.length}`}
-                            weight={Math.max(3.2, line * 1.25)} // sichtbar über base track
-                            color="rgba(255, 0, 0, 0.95)"
-                            opacity={0.95}
-                        />
-                    )} */}
 
                     {/* While dragging: show lite window overlay */}
                     {isDragging && (
@@ -1005,7 +906,7 @@ export function FlightMap({
                         </>
                     )}
 
-                    {/* ✅ Hover marker stays FULL */}
+                    {/* ✅ Hover marker stays FULL and now ALWAYS on top */}
                     <HoverMarker fixes={fixesFull} followEnabled={followEnabled} />
 
                     <WindLayer
@@ -1048,7 +949,6 @@ export function FlightMap({
                     <ZoomWatcher onZoom={setZoom} />
                     <MapAutoResize watchKey={watchKey} />
 
-                    {/* <FitToTrackOnce bounds={bounds} watchKey={watchKey} /> */}
                     <FitToWindowOnCommit
                         bounds={windowBounds}
                         enabled={!!win && !storeDragging}
