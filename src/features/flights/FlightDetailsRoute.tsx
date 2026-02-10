@@ -745,9 +745,9 @@ export function FlightDetailsRoute() {
     if (!f) return [];
     return detectClimbPhases(f, {
       startGainM: 15,
-      minGainM: 150,
-      dropPct: 0.25,
-      minDropAbsM: 40,
+      minGainM: 100,
+      dropPct: 0.30,
+      minDropAbsM: 75,
       minLenPts: 25,
     });
   }, [computed?.fixesFull]);
