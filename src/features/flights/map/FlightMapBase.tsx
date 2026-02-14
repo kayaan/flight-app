@@ -813,7 +813,7 @@ export function FlightMap({
     return (
         <Box style={{ display: "flex", flexDirection: "column", height: "100%" }}>
             <Group justify="space-between" mb="xs">
-                <Text fw={600}>Zeitfenster</Text>
+                <Text fw={600}>Flight window</Text>
                 <Text c="dimmed">
                     {startPct}% ({formatTime(startSec)}) → {endPct}% ({formatTime(endSec)}) / {formatTime(totalSeconds)}
                 </Text>

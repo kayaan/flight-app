@@ -1294,21 +1294,21 @@ export function FlightDetailsRoute() {
         <SimpleGrid cols={4} spacing="xs" verticalSpacing="xs">
           <Box>
             <Text size="xs" c="dimmed">
-              Dauer
+              Duration
             </Text>
             <Text fw={600}>{dur}</Text>
           </Box>
 
           <Box>
             <Text size="xs" c="dimmed">
-              Δ Höhe
+              Δ Altitude
             </Text>
             <Text fw={600}>{dAlt == null ? "—" : `${fmtSigned(dAlt, 0)} m`}</Text>
           </Box>
 
           <Box>
             <Text size="xs" c="dimmed">
-              Alt (Start → Ende)
+              Altitude (Start → End)
             </Text>
             <Text fw={600}>
               {altStart == null || altEnd == null ? "—" : `${altStart} → ${altEnd} m`}
@@ -1317,14 +1317,14 @@ export function FlightDetailsRoute() {
 
           <Box>
             <Text size="xs" c="dimmed">
-              Alt (Min / Max)
+              Altitude (Min / Max)
             </Text>
             <Text fw={600}>{altMin == null || altMax == null ? "—" : `${altMin} / ${altMax} m`}</Text>
           </Box>
 
           <Box>
             <Text size="xs" c="dimmed">
-              Ø Vario ({varioWindowSec}s)
+              Avg vario ({varioWindowSec}s)
             </Text>
             <Text fw={600}>{vAvg == null ? "—" : `${vAvg.toFixed(2)} m/s`}</Text>
           </Box>
@@ -1340,14 +1340,14 @@ export function FlightDetailsRoute() {
 
           <Box>
             <Text size="xs" c="dimmed">
-              Ø Speed
+              Avg speed
             </Text>
             <Text fw={600}>{spAvg == null ? "—" : `${spAvg.toFixed(1)} km/h`}</Text>
           </Box>
 
           <Box>
             <Text size="xs" c="dimmed">
-              Speed (Max)
+              Max speed
             </Text>
             <Text fw={600}>{spMax == null ? "—" : `${spMax.toFixed(1)} km/h`}</Text>
           </Box>
@@ -1365,7 +1365,7 @@ export function FlightDetailsRoute() {
 
           <Box>
             <Text size="xs" c="dimmed">
-              Längste Climb-Phase
+              Longest climb phase
             </Text>
             <Text fw={600}>
               {bestClimbT == null || bestClimbDAlt == null
