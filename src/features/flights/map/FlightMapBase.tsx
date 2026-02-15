@@ -15,10 +15,10 @@ import { MapContainer, TileLayer, Polyline, useMap, useMapEvents } from "react-l
 import { useWindConfigStore } from "../analysis/wind/wind.config.store";
 import { useWindEstimate } from "../analysis/wind/useWindEstimate";
 import { WindLayer } from "./layers/windLayer";
-import { detectClimbPhases } from "../analysis/turns/detectClimbPhases";
 import type { FixPoint } from "../igc";
-import { detectThermalCirclesInClimbs } from "../analysis/turns/detectThermalCircles";
 import { ThermalCirclesLayer } from "./layers/ThermalCirclesLayer";
+import { useFlightDetailsUiStore } from "../store/flightDetailsUi.store";
+import type { ThermalCircle } from "../analysis/turns/detectThermalCircles";
 
 export type BaseMap = "osm" | "topo";
 
@@ -687,18 +687,22 @@ function dragStyleForZoomTopoGlow(z: number) {
 }
 
 export function FlightMap({
-    baseMap = "osm",
     watchKey,
     fixesFull,
     fixesLite,
-    followEnabled = true,
+    thermals,
 }: {
-    baseMap?: BaseMap;
     watchKey?: unknown;
     fixesFull: FixPoint[];
     fixesLite: FixPoint[];
-    followEnabled: boolean;
+    thermals: ThermalCircle[];  // besser: ThermalCircle[] importieren, wenn du den Typ exportiert hast
 }) {
+
+    const baseMap = useFlightDetailsUiStore((s) => s.baseMap);
+    const followEnabled = useFlightDetailsUiStore((s) => s.followEnabled);
+    const showThermalsOnMap = useFlightDetailsUiStore((s) => s.showThermalsOnMap);
+
+
     const hasTrack = fixesFull.length >= 2;
     const initialZoom = hasTrack ? 13 : 11;
 
@@ -707,7 +711,6 @@ export function FlightMap({
     const setWindow = useTimeWindowStore((s) => s.setWindow);
     const isDragging = useTimeWindowStore((s) => s.isDragging);
     const setDragging = useTimeWindowStore((s) => s.setDragging);
-    const storeDragging = useTimeWindowStore((s) => s.isDragging);
 
     const windConfig = useWindConfigStore((s) => s.config);
 
@@ -720,7 +723,7 @@ export function FlightMap({
         return { startSec: win.startSec, endSec: win.endSec };
     }, [win]);
 
-    const wind = useWindEstimate(windFixes, windRange!, windConfig);
+
 
     const windowBounds = React.useMemo(() => {
         if (!win) return null;
@@ -741,6 +744,7 @@ export function FlightMap({
     const baseFullPoints = fullPoints;
 
     const totalSeconds = fixesFull.length ? fixesFull[fixesFull.length - 1].tSec : 0;
+    const wind = useWindEstimate(windFixes, windRange ?? { startSec: 0, endSec: totalSeconds }, windConfig);
 
     // window is Source-of-Truth (from store), fallback to full range
     const startSec = win?.startSec ?? 0;
@@ -778,37 +782,6 @@ export function FlightMap({
 
     const startPct = pct(startSec, totalSeconds);
     const endPct = pct(endSec, totalSeconds);
-
-    const climbs = React.useMemo(() => {
-        if (!fixesFull?.length) return [];
-        return detectClimbPhases(fixesFull, {
-            startGainM: 15,
-            minGainM: 150,
-            dropPct: 0.25,
-            minDropAbsM: 40,
-            minLenPts: 25,
-        });
-    }, [fixesFull]);
-
-    // ✅ Make circles MUCH more permissive (single turn should show)
-    const thermals = React.useMemo(() => {
-        if (!fixesFull?.length) return [];
-        if (!climbs.length) return [];
-
-        return detectThermalCirclesInClimbs(fixesFull, climbs, {
-            windowPts: 40, // was 60 -> better for short/weak circles
-            stepPts: 6, // was 8 -> denser scan
-            minTurnDeg: 270, // accept "almost one full turn"
-            minRadiusM: 20, // was 30
-            maxRadiusM: 160, // was 110
-            maxRadiusSlackM: 90, // was 60
-            maxRadiusRelStd: 0.5, // was 0.35
-            minSignConsistency: 0.45, // was 0.70 (less strict)
-            minAltGainM: 8, // was 30 (weak thermals OK)
-            mergeGapPts: 12, // was 10
-            backtrackPts: 8, // was 6
-        });
-    }, [fixesFull, climbs]);
 
     return (
         <Box style={{ display: "flex", flexDirection: "column", height: "100%" }}>
@@ -868,13 +841,18 @@ export function FlightMap({
                     />
 
                     {/* ✅ Thermal circles: allow low quality + few points so single turns render */}
-                    <ThermalCirclesLayer
-                        fixesFull={fixesFull}
-                        thermals={thermals}
-                        minQuality={0.05} // was 0.20
-                        minPts={6} // was 25
-                        simplifyEveryN={1} // was 2 (don’t kill small circles)
-                    />
+                    {showThermalsOnMap && (
+                        <>
+                            <ThermalCirclesLayer
+                                fixesFull={fixesFull}
+                                thermals={thermals}
+                                minQuality={0.05} // was 0.20
+                                minPts={6} // was 25
+                                simplifyEveryN={1} // was 2 (don’t kill small circles)
+                            />
+                        </>
+                    )}
+
 
                     {/* While dragging: show lite window overlay */}
                     {isDragging && (
@@ -945,7 +923,7 @@ export function FlightMap({
 
                     <FitToWindowOnCommit
                         bounds={windowBounds}
-                        enabled={!!win && !storeDragging}
+                        enabled={!!win && !isDragging}
                         commitKey={
                             win
                                 ? `${Math.round(win.startSec)}-${Math.round(win.endSec)}-${String(watchKey ?? "")}`
@@ -956,7 +934,7 @@ export function FlightMap({
                         fullBounds={bounds}
                         windowBounds={windowBounds}
                         win={win}
-                        isDragging={storeDragging}
+                        isDragging={isDragging}
                         watchKey={watchKey}
                     />
                 </MapContainer>

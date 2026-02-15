@@ -23,10 +23,12 @@ import { useAuthStore } from "../auth/store/auth.store";
 import { flightApi } from "./flights.api";
 import type { FixPoint, SeriesPoint } from "./igc";
 
-import { FlightMap, type BaseMap } from "./map/FlightMapBase";
+import { FlightMap } from "./map/FlightMapBase";
 import { useFlightHoverStore } from "./store/flightHover.store";
 import { useTimeWindowStore } from "./store/timeWindow.store";
 import { detectClimbPhases } from "./analysis/turns/detectClimbPhases";
+import { useFlightDetailsUiStore, type BaseMap as UiBaseMap } from "./store/flightDetailsUi.store";
+import { detectThermalCirclesInClimbs } from "./analysis/turns/detectThermalCircles";
 
 interface AxisPointerLabelParams {
   value: number | string | Date;
@@ -42,9 +44,6 @@ interface AxisPointerLabelParams {
   }>;
   [key: string]: any;
 }
-
-const ZOOM_SYNC_KEY = "flyapp.flightDetails.zoomSync";
-const AUTO_FIT_KEY = "flyapp.flightDetails.autoFitSelection";
 
 const axisPointerLabelFormatter = (params: AxisPointerLabelParams) => {
   const v = params.value as any;
@@ -103,12 +102,8 @@ const ALT_DATAZOOM = [
   { id: "dz_slider_alt", type: "slider", xAxisIndex: 0, height: 20, bottom: 8 },
 ] as const;
 
-const VARIO_DATAZOOM = [
-  { id: "dz_inside_vario", type: "inside", xAxisIndex: 0, moveOnMouseMove: true },
-] as const;
-const SPEED_DATAZOOM = [
-  { id: "dz_inside_speed", type: "inside", xAxisIndex: 0, moveOnMouseMove: true },
-] as const;
+const VARIO_DATAZOOM = [{ id: "dz_inside_vario", type: "inside", xAxisIndex: 0, moveOnMouseMove: true }] as const;
+const SPEED_DATAZOOM = [{ id: "dz_inside_speed", type: "inside", xAxisIndex: 0, moveOnMouseMove: true }] as const;
 
 function clamp(n: number, min: number, max: number) {
   return Math.min(max, Math.max(min, n));
@@ -510,16 +505,7 @@ function fmtSigned(n: number, digits = 0) {
 }
 
 function colorForClimbIndex(i: number) {
-  const colors = [
-    "#ff006e",
-    "#fb5607",
-    "#ffbe0b",
-    "#8338ec",
-    "#3a86ff",
-    "#06d6a0",
-    "#ef476f",
-    "#118ab2",
-  ];
+  const colors = ["#ff006e", "#fb5607", "#ffbe0b", "#8338ec", "#3a86ff", "#06d6a0", "#ef476f", "#118ab2"];
   return colors[i % colors.length];
 }
 
@@ -529,80 +515,38 @@ export function FlightDetailsRoute() {
   const token = useAuthStore((s) => s.token);
   const { id } = useParams({ from: "/flights/$id" });
 
-  const FOLLOW_KEY = "flyapp.flightDetails.followMarker";
-  const STATS_KEY = "flyapp.flightDetails.showStats";
-  const VARIO_WIN_KEY = "flyapp.flightDetails.varioWindowSec";
+  // ✅ UI from store (persisted)
+  const autoFitSelection = useFlightDetailsUiStore((s) => s.autoFitSelection);
+  const zoomSyncEnabled = useFlightDetailsUiStore((s) => s.zoomSyncEnabled);
+  const syncEnabled = useFlightDetailsUiStore((s) => s.syncEnabled);
+  const followEnabled = useFlightDetailsUiStore((s) => s.followEnabled);
+  const showStats = useFlightDetailsUiStore((s) => s.showStats);
 
-  const SHOW_ALT_KEY = "flyapp.flightDetails.showChart.alt";
-  const SHOW_VARIO_KEY = "flyapp.flightDetails.showChart.vario";
-  const SHOW_SPEED_KEY = "flyapp.flightDetails.showChart.speed";
+  const showAlt = useFlightDetailsUiStore((s) => s.showAlt);
+  const showVario = useFlightDetailsUiStore((s) => s.showVario);
+  const showSpeed = useFlightDetailsUiStore((s) => s.showSpeed);
 
-  const [followEnabled, setFollowEnabled] = React.useState<boolean>(() => {
-    try {
-      const raw = localStorage.getItem(FOLLOW_KEY);
-      if (raw == null) return true;
-      return raw === "1";
-    } catch {
-      return true;
-    }
-  });
+  const varioWindowSec = useFlightDetailsUiStore((s) => s.varioWindowSec);
+  const baseMap = useFlightDetailsUiStore((s) => s.baseMap);
 
-  const [zoomSyncEnabled, setZoomSyncEnabled] = React.useState<boolean>(() => {
-    try {
-      const raw = localStorage.getItem(ZOOM_SYNC_KEY);
-      if (raw == null) return true; // default: an
-      return raw === "1";
-    } catch {
-      return true;
-    }
-  });
+  const setAutoFitSelectionUi = useFlightDetailsUiStore((s) => s.setAutoFitSelection);
+  const setZoomSyncEnabled = useFlightDetailsUiStore((s) => s.setZoomSyncEnabled);
+  const setSyncEnabled = useFlightDetailsUiStore((s) => s.setSyncEnabled);
+  const setFollowEnabled = useFlightDetailsUiStore((s) => s.setFollowEnabled);
+  const setShowStats = useFlightDetailsUiStore((s) => s.setShowStats);
 
+  const setShowAlt = useFlightDetailsUiStore((s) => s.setShowAlt);
+  const setShowVario = useFlightDetailsUiStore((s) => s.setShowVario);
+  const setShowSpeed = useFlightDetailsUiStore((s) => s.setShowSpeed);
 
+  const setVarioWindowSec = useFlightDetailsUiStore((s) => s.setVarioWindowSec);
+  const setBaseMap = useFlightDetailsUiStore((s) => s.setBaseMap);
 
+  // keep TimeWindow-store synced (AutoFit logic lives there)
+  const setAutoFitSelectionInWindowStore = useTimeWindowStore((s) => s.setAutoFitSelection);
   React.useEffect(() => {
-    try {
-      localStorage.setItem(ZOOM_SYNC_KEY, zoomSyncEnabled ? "1" : "0");
-    } catch { }
-  }, [zoomSyncEnabled]);
-
-  React.useEffect(() => {
-    try {
-      localStorage.setItem(FOLLOW_KEY, followEnabled ? "1" : "0");
-    } catch { }
-  }, [followEnabled]);
-
-  const [showStats, setShowStats] = React.useState<boolean>(() => {
-    try {
-      const raw = localStorage.getItem(STATS_KEY);
-      if (raw == null) return true;
-      return raw === "1";
-    } catch {
-      return true;
-    }
-  });
-
-  React.useEffect(() => {
-    try {
-      localStorage.setItem(STATS_KEY, showStats ? "1" : "0");
-    } catch { }
-  }, [showStats]);
-
-  const [varioWindowSec, setVarioWindowSec] = React.useState<number>(() => {
-    try {
-      const raw = localStorage.getItem(VARIO_WIN_KEY);
-      const n = raw == null ? NaN : Number(raw);
-      if (Number.isFinite(n) && n > 0) return clamp(n, 1, 30);
-      return 4;
-    } catch {
-      return 4;
-    }
-  });
-
-  React.useEffect(() => {
-    try {
-      localStorage.setItem(VARIO_WIN_KEY, String(varioWindowSec));
-    } catch { }
-  }, [varioWindowSec]);
+    setAutoFitSelectionInWindowStore(autoFitSelection);
+  }, [autoFitSelection, setAutoFitSelectionInWindowStore]);
 
   const setHoverTSecThrottled = useFlightHoverStore((s) => s.setHoverTSecThrottled);
   const clearNow = useFlightHoverStore((s) => s.clearNow);
@@ -629,9 +573,7 @@ export function FlightDetailsRoute() {
   const [error, setError] = React.useState<string | null>(null);
 
   const [windowSec] = React.useState(calculationWindow);
-  const [baseMap, setBaseMap] = React.useState<BaseMap>("topo");
 
-  const [syncEnabled, setSyncEnabled] = React.useState(true);
   const chartGroupId = React.useMemo(() => `flight-${id}-charts`, [id]);
 
   const altInstRef = React.useRef<any>(null);
@@ -642,6 +584,14 @@ export function FlightDetailsRoute() {
   const containerRef = React.useRef<HTMLDivElement | null>(null);
   const draggingRef = React.useRef(false);
   const [splitPct, setSplitPct] = React.useState<number>(60);
+
+
+  // ✅ neu (bei den anderen UI-store selects)
+  const showClimbLinesOnChart = useFlightDetailsUiStore((s) => s.showClimbLinesOnChart);
+  const showThermalsOnMap = useFlightDetailsUiStore((s) => s.showThermalsOnMap);
+
+  const setShowClimbLinesOnChart = useFlightDetailsUiStore((s) => s.setShowClimbLinesOnChart);
+  const setShowThermalsOnMap = useFlightDetailsUiStore((s) => s.setShowThermalsOnMap);
 
   const [chartReady, setChartReady] = React.useState({
     alt: false,
@@ -746,11 +696,31 @@ export function FlightDetailsRoute() {
     return detectClimbPhases(f, {
       startGainM: 15,
       minGainM: 100,
-      dropPct: 0.30,
+      dropPct: 0.3,
       minDropAbsM: 75,
       minLenPts: 25,
     });
   }, [computed?.fixesFull]);
+
+  const thermals = React.useMemo(() => {
+    const f = computed?.fixesFull ?? null;
+    if (!f) return [];
+    if (!climbs.length) return [];
+
+    return detectThermalCirclesInClimbs(f, climbs, {
+      windowPts: 40,
+      stepPts: 6,
+      minTurnDeg: 270,
+      minRadiusM: 20,
+      maxRadiusM: 160,
+      maxRadiusSlackM: 90,
+      maxRadiusRelStd: 0.5,
+      minSignConsistency: 0.45,
+      minAltGainM: 8,
+      mergeGapPts: 12,
+      backtrackPts: 8,
+    });
+  }, [computed?.fixesFull, climbs]);
 
   const climbMarkLineData = React.useMemo(() => {
     const f = computed?.fixesFull;
@@ -767,14 +737,12 @@ export function FlightDetailsRoute() {
 
       const color = colorForClimbIndex(i);
 
-      // Start line
       data.push({
         xAxis: startSec,
         lineStyle: { color, width: 2, opacity: 0.9 },
         label: { show: false },
       });
 
-      // End line
       data.push({
         xAxis: endSec,
         lineStyle: { color, width: 2, opacity: 0.9 },
@@ -924,22 +892,8 @@ export function FlightDetailsRoute() {
       },
       dataZoom: ALT_DATAZOOM,
       series: [
-        {
-          id: "alt",
-          name: "Altitude",
-          type: "line",
-          data: chartData.alt,
-          showSymbol: false,
-          lineStyle: { width: 2 },
-        },
-        {
-          id: "__window",
-          name: "__window",
-          type: "line",
-          data: [],
-          silent: true,
-          markLine: windowMarkLine,
-        },
+        { id: "alt", name: "Altitude", type: "line", data: chartData.alt, showSymbol: false, lineStyle: { width: 2 } },
+        { id: "__window", name: "__window", type: "line", data: [], silent: true, markLine: windowMarkLine },
         {
           id: "__preview",
           name: "__preview",
@@ -970,12 +924,13 @@ export function FlightDetailsRoute() {
             label: { show: false },
             animation: false,
             silent: true,
-            data: climbMarkLineData,
+            // ✅ wenn toggle aus: leere data => keine Linien
+            data: showClimbLinesOnChart ? climbMarkLineData : [],
           },
         },
       ],
     };
-  }, [chartData, baseOption, windowMarkLine, climbMarkLineData]);
+  }, [chartData, baseOption, windowMarkLine, climbMarkLineData, showClimbLinesOnChart]);
 
   const varioOption = React.useMemo(() => {
     if (!chartData) return {};
@@ -985,23 +940,12 @@ export function FlightDetailsRoute() {
         trigger: "axis",
         axisPointer: {
           type: "cross",
-          lineStyle: {
-            color: "rgba(255, 77, 79, 0.9)",
-            width: 1.5,
-            type: "dashed",
-            dashOffset: 0,
-          },
+          lineStyle: { color: "rgba(255, 77, 79, 0.9)", width: 1.5, type: "dashed", dashOffset: 0 },
           label: {
             show: true,
             formatter: (params: AxisPointerLabelParams) => {
-              if (params.axisDimension === "x") {
-                const time = params.value as number;
-                return time.toFixed(0) + " s";
-              }
-              if (params.axisDimension === "y") {
-                const vSpeed = params.value as number;
-                return vSpeed.toFixed(1) + " m/s";
-              }
+              if (params.axisDimension === "x") return (params.value as number).toFixed(0) + " s";
+              if (params.axisDimension === "y") return (params.value as number).toFixed(1) + " m/s";
               return "";
             },
           },
@@ -1013,19 +957,8 @@ export function FlightDetailsRoute() {
         },
       },
       grid: { left: 56, right: 16, top: 24, bottom: 24 },
-      xAxis: {
-        type: "value",
-        min: 0,
-        max: chartData.maxT,
-        axisLabel: { formatter: (v: number) => fmtTime(v) },
-      },
-      yAxis: {
-        type: "value",
-        name: "m/s",
-        min: chartData.vMin,
-        max: chartData.vMax,
-        scale: true,
-      },
+      xAxis: { type: "value", min: 0, max: chartData.maxT, axisLabel: { formatter: (v: number) => fmtTime(v) } },
+      yAxis: { type: "value", name: "m/s", min: chartData.vMin, max: chartData.vMax, scale: true },
       dataZoom: VARIO_DATAZOOM,
       series: [
         {
@@ -1035,20 +968,9 @@ export function FlightDetailsRoute() {
           data: chartData.vSpeed,
           showSymbol: false,
           lineStyle: { width: 2 },
-          markLine: {
-            symbol: ["none", "none"],
-            lineStyle: { type: "dashed", opacity: 0.6 },
-            data: [{ yAxis: 0 }],
-          },
+          markLine: { symbol: ["none", "none"], lineStyle: { type: "dashed", opacity: 0.6 }, data: [{ yAxis: 0 }] },
         },
-        {
-          id: "__window",
-          name: "__window",
-          type: "line",
-          data: [],
-          silent: true,
-          markLine: windowMarkLine,
-        },
+        { id: "__window", name: "__window", type: "line", data: [], silent: true, markLine: windowMarkLine },
         {
           id: "__preview",
           name: "__preview",
@@ -1080,23 +1002,12 @@ export function FlightDetailsRoute() {
         trigger: "axis",
         axisPointer: {
           type: "cross",
-          lineStyle: {
-            color: "rgba(255, 77, 79, 0.9)",
-            width: 1.5,
-            type: "dashed",
-            dashOffset: 0,
-          },
+          lineStyle: { color: "rgba(255, 77, 79, 0.9)", width: 1.5, type: "dashed", dashOffset: 0 },
           label: {
             show: true,
             formatter: (params: AxisPointerLabelParams) => {
-              if (params.axisDimension === "x") {
-                const time = params.value as number;
-                return time.toFixed(0) + " s";
-              }
-              if (params.axisDimension === "y") {
-                const speed = params.value as number;
-                return speed.toFixed(0) + " km/h";
-              }
+              if (params.axisDimension === "x") return (params.value as number).toFixed(0) + " s";
+              if (params.axisDimension === "y") return (params.value as number).toFixed(0) + " km/h";
               return "";
             },
           },
@@ -1108,31 +1019,12 @@ export function FlightDetailsRoute() {
         },
       },
       grid: { left: 56, right: 16, top: 24, bottom: 24 },
-      xAxis: {
-        type: "value",
-        min: 0,
-        max: chartData.maxT,
-        axisLabel: { formatter: (v: number) => fmtTime(v) },
-      },
+      xAxis: { type: "value", min: 0, max: chartData.maxT, axisLabel: { formatter: (v: number) => fmtTime(v) } },
       yAxis: { type: "value", name: "km/h", scale: true },
       dataZoom: SPEED_DATAZOOM,
       series: [
-        {
-          id: "speed",
-          name: "Ground speed",
-          type: "line",
-          data: chartData.hSpeed,
-          showSymbol: false,
-          lineStyle: { width: 2 },
-        },
-        {
-          id: "__window",
-          name: "__window",
-          type: "line",
-          data: [],
-          silent: true,
-          markLine: windowMarkLine,
-        },
+        { id: "speed", name: "Ground speed", type: "line", data: chartData.hSpeed, showSymbol: false, lineStyle: { width: 2 } },
+        { id: "__window", name: "__window", type: "line", data: [], silent: true, markLine: windowMarkLine },
         {
           id: "__preview",
           name: "__preview",
@@ -1156,54 +1048,6 @@ export function FlightDetailsRoute() {
     };
   }, [chartData, baseOption, windowMarkLine]);
 
-  const [showAlt, setShowAlt] = React.useState<boolean>(() => {
-    try {
-      const raw = localStorage.getItem(SHOW_ALT_KEY);
-      if (raw == null) return true;
-      return raw === "1";
-    } catch {
-      return true;
-    }
-  });
-
-  const [showVario, setShowVario] = React.useState<boolean>(() => {
-    try {
-      const raw = localStorage.getItem(SHOW_VARIO_KEY);
-      if (raw == null) return true;
-      return raw === "1";
-    } catch {
-      return true;
-    }
-  });
-
-  const [showSpeed, setShowSpeed] = React.useState<boolean>(() => {
-    try {
-      const raw = localStorage.getItem(SHOW_SPEED_KEY);
-      if (raw == null) return true;
-      return raw === "1";
-    } catch {
-      return true;
-    }
-  });
-
-  React.useEffect(() => {
-    try {
-      localStorage.setItem(SHOW_ALT_KEY, showAlt ? "1" : "0");
-    } catch { }
-  }, [showAlt]);
-
-  React.useEffect(() => {
-    try {
-      localStorage.setItem(SHOW_VARIO_KEY, showVario ? "1" : "0");
-    } catch { }
-  }, [showVario]);
-
-  React.useEffect(() => {
-    try {
-      localStorage.setItem(SHOW_SPEED_KEY, showSpeed ? "1" : "0");
-    } catch { }
-  }, [showSpeed]);
-
   React.useEffect(() => {
     const a = altInstRef.current;
     const v = varioInstRef.current;
@@ -1214,7 +1058,6 @@ export function FlightDetailsRoute() {
     if (!syncEnabled) return;
 
     const instances: echarts.ECharts[] = [];
-
     if (showAlt) {
       if (!a) return;
       instances.push(a);
@@ -1230,10 +1073,7 @@ export function FlightDetailsRoute() {
 
     if (instances.length < 2) return;
 
-    for (const inst of instances) {
-      inst.group = chartGroupId;
-    }
-
+    for (const inst of instances) inst.group = chartGroupId;
     echarts.connect(chartGroupId);
 
     return () => {
@@ -1247,7 +1087,6 @@ export function FlightDetailsRoute() {
       varioInstRef.current?.resize?.();
       speedInstRef.current?.resize?.();
     }, 40);
-
     return () => window.clearTimeout(t);
   }, [splitPct]);
 
@@ -1286,8 +1125,7 @@ export function FlightDetailsRoute() {
             Segment Stats
           </Text>
           <Text size="xs" c="dimmed">
-            {fmtTime(Math.min(startSec, endSec))} → {fmtTime(Math.max(startSec, endSec))} /{" "}
-            {fmtTime(totalSec)}
+            {fmtTime(Math.min(startSec, endSec))} → {fmtTime(Math.max(startSec, endSec))} / {fmtTime(totalSec)}
           </Text>
         </Group>
 
@@ -1310,9 +1148,7 @@ export function FlightDetailsRoute() {
             <Text size="xs" c="dimmed">
               Altitude (Start → End)
             </Text>
-            <Text fw={600}>
-              {altStart == null || altEnd == null ? "—" : `${altStart} → ${altEnd} m`}
-            </Text>
+            <Text fw={600}>{altStart == null || altEnd == null ? "—" : `${altStart} → ${altEnd} m`}</Text>
           </Box>
 
           <Box>
@@ -1333,9 +1169,7 @@ export function FlightDetailsRoute() {
             <Text size="xs" c="dimmed">
               Vario (Min / Max)
             </Text>
-            <Text fw={600}>
-              {vMin == null || vMax == null ? "—" : `${vMin.toFixed(2)} / ${vMax.toFixed(2)} m/s`}
-            </Text>
+            <Text fw={600}>{vMin == null || vMax == null ? "—" : `${vMin.toFixed(2)} / ${vMax.toFixed(2)} m/s`}</Text>
           </Box>
 
           <Box>
@@ -1368,9 +1202,7 @@ export function FlightDetailsRoute() {
               Longest climb phase
             </Text>
             <Text fw={600}>
-              {bestClimbT == null || bestClimbDAlt == null
-                ? "—"
-                : `${fmtTime(bestClimbT)} (${fmtSigned(bestClimbDAlt, 0)} m)`}
+              {bestClimbT == null || bestClimbDAlt == null ? "—" : `${fmtTime(bestClimbT)} (${fmtSigned(bestClimbDAlt, 0)} m)`}
             </Text>
           </Box>
         </SimpleGrid>
@@ -1394,16 +1226,13 @@ export function FlightDetailsRoute() {
     ze = clamp(ze, 0, maxT);
     if (ze <= zs) return;
 
-    // (unverändert gelassen, weil bei dir eh “kein Problem”)
     if (showAlt && altInstRef.current) {
       altInstRef.current.dispatchAction?.({ type: "dataZoom", dataZoomIndex: 0, startValue: zs, endValue: ze });
       altInstRef.current.dispatchAction?.({ type: "dataZoom", dataZoomIndex: 1, startValue: zs, endValue: ze });
     }
-
     if (showVario && varioInstRef.current) {
       varioInstRef.current.dispatchAction?.({ type: "dataZoom", dataZoomIndex: 0, startValue: zs, endValue: ze });
     }
-
     if (showSpeed && speedInstRef.current) {
       speedInstRef.current.dispatchAction?.({ type: "dataZoom", dataZoomIndex: 0, startValue: zs, endValue: ze });
     }
@@ -1412,7 +1241,7 @@ export function FlightDetailsRoute() {
   React.useEffect(() => {
     if (!zoomSyncEnabled) return;
     if (!win) return;
-    if (isDragging) return; // während drag/preview nicht spammen
+    if (isDragging) return;
     zoomChartsToWindow();
   }, [zoomSyncEnabled, isDragging, zoomChartsToWindow, win]);
 
@@ -1427,11 +1256,9 @@ export function FlightDetailsRoute() {
       altInstRef.current.dispatchAction?.({ type: "dataZoom", dataZoomIndex: 0, startValue: zs, endValue: ze });
       altInstRef.current.dispatchAction?.({ type: "dataZoom", dataZoomIndex: 1, startValue: zs, endValue: ze });
     }
-
     if (showVario && varioInstRef.current) {
       varioInstRef.current.dispatchAction?.({ type: "dataZoom", dataZoomIndex: 0, startValue: zs, endValue: ze });
     }
-
     if (showSpeed && speedInstRef.current) {
       speedInstRef.current.dispatchAction?.({ type: "dataZoom", dataZoomIndex: 0, startValue: zs, endValue: ze });
     }
@@ -1459,32 +1286,10 @@ export function FlightDetailsRoute() {
     return out;
   }, [showAlt, showVario, showSpeed]);
 
-
   const zoomSyncLockRef = React.useRef(false);
 
-  type ZoomRange =
-    | { kind: "value"; startValue: number; endValue: number }
-    | { kind: "percent"; start: number; end: number };
+  type ZoomRange = { kind: "value"; startValue: number; endValue: number } | { kind: "percent"; start: number; end: number };
 
-  const setAutoFitSelection = useTimeWindowStore((s) => s.setAutoFitSelection);
-
-  const [autoFitSelection, setAutoFitSelectionUi] = React.useState<boolean>(() => {
-    try {
-      const raw = localStorage.getItem(AUTO_FIT_KEY);
-      if (raw == null) return true; // default: an
-      return raw === "1";
-    } catch {
-      return true;
-    }
-  });
-
-  React.useEffect(() => {
-    // store + localstorage synchron halten
-    setAutoFitSelection(autoFitSelection);
-    try {
-      localStorage.setItem(AUTO_FIT_KEY, autoFitSelection ? "1" : "0");
-    } catch { }
-  }, [autoFitSelection, setAutoFitSelection]);
   const setPreviewLinesAll = React.useCallback(
     (a: number, b: number) => {
       const x1 = Math.min(a, b);
@@ -1493,14 +1298,7 @@ export function FlightDetailsRoute() {
       for (const { inst } of getVisibleCharts()) {
         try {
           inst.setOption(
-            {
-              series: [
-                {
-                  id: "__preview",
-                  markLine: { data: [{ xAxis: x1 }, { xAxis: x2 }] },
-                },
-              ],
-            },
+            { series: [{ id: "__preview", markLine: { data: [{ xAxis: x1 }, { xAxis: x2 }] } }] },
             { silent: true }
           );
         } catch { }
@@ -1512,22 +1310,11 @@ export function FlightDetailsRoute() {
   const clearPreviewAll = React.useCallback(() => {
     for (const { inst } of getVisibleCharts()) {
       try {
-        inst.setOption(
-          {
-            series: [
-              {
-                id: "__preview",
-                markLine: { data: [] },
-              },
-            ],
-          },
-          { silent: true }
-        );
+        inst.setOption({ series: [{ id: "__preview", markLine: { data: [] } }] }, { silent: true });
       } catch { }
     }
   }, [getVisibleCharts]);
 
-  // ✅ FIX (minimal): during Shift-range-select disable inside-dataZoom so chart does NOT pan/move
   const setPanEnabled = React.useCallback((kind: ChartKind, enabled: boolean) => {
     const inst = kind === "alt" ? altInstRef.current : kind === "vario" ? varioInstRef.current : speedInstRef.current;
     if (!inst) return;
@@ -1536,16 +1323,7 @@ export function FlightDetailsRoute() {
 
     try {
       inst.setOption(
-        {
-          dataZoom: [
-            {
-              id: dzId,
-              // keep your existing config, but hard-disable interaction during selection
-              disabled: !enabled,
-              moveOnMouseMove: enabled,
-            },
-          ],
-        },
+        { dataZoom: [{ id: dzId, disabled: !enabled, moveOnMouseMove: enabled }] },
         { silent: true }
       );
     } catch { }
@@ -1569,7 +1347,6 @@ export function FlightDetailsRoute() {
     return !!e?.shiftKey;
   };
 
-  // ✅ FIX (minimal): stop event harder (prevents ECharts from also handling drag)
   const stopEvent = (ev: any) => {
     const e = ev?.event ?? ev;
     e?.preventDefault?.();
@@ -1610,7 +1387,6 @@ export function FlightDetailsRoute() {
 
       const onDown = (ev: any) => {
         if (!isSelectGesture(ev)) return;
-
         if (dragRef.current.dragging && dragRef.current.owner && dragRef.current.owner !== kind) return;
 
         stopEvent(ev);
@@ -1636,9 +1412,7 @@ export function FlightDetailsRoute() {
           totalSec: Number.isFinite(maxT) && maxT > 0 ? maxT : t,
         });
 
-        // ✅ key change: disable inside-dataZoom so the chart doesn't pan while selecting
         setPanEnabled(kind, false);
-
         setPreviewLinesAll(t, t);
       };
 
@@ -1684,13 +1458,11 @@ export function FlightDetailsRoute() {
         if (t != null) dragRef.current.lastT = t;
 
         dragRef.current.dragging = false;
-
         setDragging(false);
 
         const startT = dragRef.current.startT;
         const lastT = dragRef.current.lastT;
 
-        // ✅ restore inside-dataZoom
         setPanEnabled(kind, true);
 
         const maxT = chartData?.maxT ?? totalSec ?? 0;
@@ -1727,7 +1499,6 @@ export function FlightDetailsRoute() {
         });
 
         clearPreviewAll();
-
         dragRef.current.startT = null;
         dragRef.current.lastT = null;
         dragRef.current.owner = null;
@@ -1742,12 +1513,9 @@ export function FlightDetailsRoute() {
         dragRef.current.lastT = null;
 
         setDragging(false);
-
-        // ✅ restore inside-dataZoom
         setPanEnabled(kind, true);
 
         clearPreviewAll();
-
         setWindow(null);
 
         dragRef.current.owner = null;
@@ -1765,16 +1533,7 @@ export function FlightDetailsRoute() {
         zr.off("globalout", onGlobalOut);
       };
     },
-    [
-      chartData?.maxT,
-      totalSec,
-      setDragging,
-      setPanEnabled,
-      setPreviewLinesAll,
-      clearPreviewAll,
-      setWindow,
-      setWindowThrottled,
-    ]
+    [chartData?.maxT, totalSec, setDragging, setPanEnabled, setPreviewLinesAll, clearPreviewAll, setWindow, setWindowThrottled]
   );
 
   React.useEffect(() => {
@@ -1797,32 +1556,21 @@ export function FlightDetailsRoute() {
       }
 
       return null;
-    }
-
+    };
 
     const applyZoomRangeToChart = (inst: any, kind: ChartKind, r: ZoomRange) => {
       if (!inst) return;
 
-      const idxs = kind === "alt" ? [0, 1] : [0]; // alt: inside + slider, vario/speed: nur inside
+      const idxs = kind === "alt" ? [0, 1] : [0];
 
       for (const dataZoomIndex of idxs) {
         if (r.kind === "value") {
-          inst.dispatchAction?.({
-            type: "dataZoom",
-            dataZoomIndex,
-            startValue: r.startValue,
-            endValue: r.endValue,
-          });
+          inst.dispatchAction?.({ type: "dataZoom", dataZoomIndex, startValue: r.startValue, endValue: r.endValue });
         } else {
-          inst.dispatchAction?.({
-            type: "dataZoom",
-            dataZoomIndex,
-            start: r.start,
-            end: r.end,
-          });
+          inst.dispatchAction?.({ type: "dataZoom", dataZoomIndex, start: r.start, end: r.end });
         }
       }
-    }
+    };
 
     const visibles = getVisibleCharts();
     if (visibles.length < 2) return;
@@ -1831,9 +1579,7 @@ export function FlightDetailsRoute() {
 
     for (const { inst } of visibles) {
       const onDataZoom = (e: any) => {
-        // während Range-Select / Preview nicht syncen (sonst fighten Events)
         if (isDragging) return;
-
         if (zoomSyncLockRef.current) return;
 
         const r = pickZoomRangeFromEvent(e);
@@ -1846,7 +1592,6 @@ export function FlightDetailsRoute() {
             applyZoomRangeToChart(other.inst, other.kind, r);
           }
         } finally {
-          // lock im nächsten Tick lösen (sonst immediate feedback loop)
           queueMicrotask(() => {
             zoomSyncLockRef.current = false;
           });
@@ -1862,7 +1607,6 @@ export function FlightDetailsRoute() {
     };
   }, [zoomSyncEnabled, getVisibleCharts, isDragging, chartsReadyTick]);
 
-
   React.useEffect(() => {
     const cleanups: Array<(() => void) | undefined> = [];
 
@@ -1875,6 +1619,8 @@ export function FlightDetailsRoute() {
     };
   }, [showAlt, showVario, showSpeed, chartsReadyTick, attachRangeSelect]);
 
+
+
   return (
     <Box p="md">
       <Stack gap="sm">
@@ -1886,16 +1632,20 @@ export function FlightDetailsRoute() {
           <Group gap="md" align="center">
 
             <Checkbox
-              label="Auto fit"
-              checked={autoFitSelection}
-              onChange={(e) => setAutoFitSelectionUi(e.currentTarget.checked)}
+              label="Climb lines"
+              checked={showClimbLinesOnChart}
+              onChange={(e) => setShowClimbLinesOnChart(e.currentTarget.checked)}
             />
 
             <Checkbox
-              label="Sync chart zoom"
-              checked={zoomSyncEnabled}
-              onChange={(e) => setZoomSyncEnabled(e.currentTarget.checked)}
+              label="Thermals"
+              checked={showThermalsOnMap}
+              onChange={(e) => setShowThermalsOnMap(e.currentTarget.checked)}
             />
+
+            <Checkbox label="Auto fit" checked={autoFitSelection} onChange={(e) => setAutoFitSelectionUi(e.currentTarget.checked)} />
+
+            <Checkbox label="Sync chart zoom" checked={zoomSyncEnabled} onChange={(e) => setZoomSyncEnabled(e.currentTarget.checked)} />
 
             <Button size="xs" variant="light" onClick={resetSelection} disabled={!win}>
               Reset selection
@@ -1904,7 +1654,7 @@ export function FlightDetailsRoute() {
             <Checkbox
               label="Topo"
               checked={baseMap === "topo"}
-              onChange={(e) => setBaseMap(e.currentTarget.checked ? "topo" : "osm")}
+              onChange={(e) => setBaseMap((e.currentTarget.checked ? "topo" : "osm") as UiBaseMap)}
             />
 
             <Button size="xs" variant="light" onClick={zoomChartsToWindow} disabled={zoomDisabled}>
@@ -1928,6 +1678,7 @@ export function FlightDetailsRoute() {
                 }
               }}
             />
+
             <Checkbox
               label="Vario"
               checked={showVario}
@@ -1959,19 +1710,13 @@ export function FlightDetailsRoute() {
             <NumberInput
               label="Vario win (s)"
               value={varioWindowSec}
-              onChange={(v) => {
-                const n = typeof v === "number" ? v : Number(v);
-                if (!Number.isFinite(n)) return;
-                setVarioWindowSec(clamp(Math.round(n), 1, 30));
-              }}
+              onChange={(v) => setVarioWindowSec(typeof v === "number" ? v : Number(v))}
               min={1}
               max={30}
               step={1}
               w={140}
               size="xs"
-              styles={{
-                label: { marginBottom: 2 },
-              }}
+              styles={{ label: { marginBottom: 2 } }}
             />
           </Group>
         </Group>
@@ -2017,15 +1762,7 @@ export function FlightDetailsRoute() {
             >
               {StatsPanel}
 
-              <Box
-                style={{
-                  flex: 1,
-                  minHeight: 0,
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: 10,
-                }}
-              >
+              <Box style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", gap: 10 }}>
                 {showAlt && (
                   <Box style={{ flex: 1, minHeight: 140 }}>
                     <Text size="sm" fw={600} mb={4}>
@@ -2124,9 +1861,9 @@ export function FlightDetailsRoute() {
                 <FlightMap
                   fixesFull={computedWithLite?.fixesFull ?? []}
                   fixesLite={computedWithLite?.fixesLite ?? []}
-                  baseMap={baseMap}
+                  thermals={thermals}
                   watchKey={`${id}-${baseMap}`}
-                  followEnabled={followEnabled}
+
                 />
               </Box>
             </Box>
