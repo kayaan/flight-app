@@ -1063,6 +1063,7 @@ export function FlightDetailsRoute() {
             },
           },
         },
+        ...buildActiveRangeMarkLine(activeRange),
         {
           id: "__climbs",
           name: "__climbs",
@@ -1080,7 +1081,7 @@ export function FlightDetailsRoute() {
         },
       ],
     };
-  }, [chartData, baseOption, windowMarkLine, climbMarkLineData, showClimbLinesOnChart, activeClimbOverlay]);
+  }, [chartData, baseOption, windowMarkLine, climbMarkLineData, showClimbLinesOnChart, activeClimbOverlay, activeRange]);
 
   const varioOption = React.useMemo(() => {
     if (!chartData) return {};
@@ -1120,6 +1121,35 @@ export function FlightDetailsRoute() {
           lineStyle: { width: 2 },
           markLine: { symbol: ["none", "none"], lineStyle: { type: "dashed", opacity: 0.6 }, data: [{ yAxis: 0 }] },
         },
+        {
+          id: "__activeClimb",
+          name: "__activeClimb",
+          type: "line",
+          data: [],
+          silent: true,
+          z: 10, // nach vorne
+          markArea: activeClimbOverlay
+            ? {
+              silent: true,
+              itemStyle: {
+                color: "rgba(255, 77, 79, 0.10)", // leichtes Band
+              },
+              data: [[{ xAxis: activeClimbOverlay.startSec }, { xAxis: activeClimbOverlay.endSec }]],
+            }
+            : undefined,
+          markLine: activeClimbOverlay
+            ? {
+              silent: true,
+              symbol: "none",
+              label: { show: false },
+              lineStyle: {
+                color: "rgba(255, 77, 79, 0.95)",
+                width: 3,
+              },
+              data: [{ xAxis: activeClimbOverlay.startSec }, { xAxis: activeClimbOverlay.endSec }],
+            }
+            : undefined,
+        },
         { id: "__window", name: "__window", type: "line", data: [], silent: true, markLine: windowMarkLine },
         {
           id: "__preview",
@@ -1140,9 +1170,25 @@ export function FlightDetailsRoute() {
             },
           },
         },
+        ...buildActiveRangeMarkLine(activeRange),
+        {
+          id: "__climbs",
+          name: "__climbs",
+          type: "line",
+          data: [],
+          silent: true,
+          markLine: {
+            symbol: "none",
+            label: { show: false },
+            animation: false,
+            silent: true,
+            // ✅ wenn toggle aus: leere data => keine Linien
+            data: showClimbLinesOnChart ? climbMarkLineData : [],
+          },
+        },
       ],
     };
-  }, [chartData, baseOption, windowMarkLine, varioWindowSec]);
+  }, [chartData, baseOption, windowMarkLine, varioWindowSec, activeRange, climbMarkLineData, showClimbLinesOnChart, activeClimbOverlay]);
 
   const speedOption = React.useMemo(() => {
     if (!chartData) return {};
@@ -1194,9 +1240,54 @@ export function FlightDetailsRoute() {
             },
           },
         },
+        {
+          id: "__activeClimb",
+          name: "__activeClimb",
+          type: "line",
+          data: [],
+          silent: true,
+          z: 10, // nach vorne
+          markArea: activeClimbOverlay
+            ? {
+              silent: true,
+              itemStyle: {
+                color: "rgba(255, 77, 79, 0.10)", // leichtes Band
+              },
+              data: [[{ xAxis: activeClimbOverlay.startSec }, { xAxis: activeClimbOverlay.endSec }]],
+            }
+            : undefined,
+          markLine: activeClimbOverlay
+            ? {
+              silent: true,
+              symbol: "none",
+              label: { show: false },
+              lineStyle: {
+                color: "rgba(255, 77, 79, 0.95)",
+                width: 3,
+              },
+              data: [{ xAxis: activeClimbOverlay.startSec }, { xAxis: activeClimbOverlay.endSec }],
+            }
+            : undefined,
+        },
+        ...buildActiveRangeMarkLine(activeRange),
+        {
+          id: "__climbs",
+          name: "__climbs",
+          type: "line",
+          data: [],
+          silent: true,
+          markLine: {
+            symbol: "none",
+            label: { show: false },
+            animation: false,
+            silent: true,
+            // ✅ wenn toggle aus: leere data => keine Linien
+            data: showClimbLinesOnChart ? climbMarkLineData : [],
+          },
+        },
       ],
     };
-  }, [chartData, baseOption, windowMarkLine]);
+  }, [chartData, baseOption, windowMarkLine, activeRange, climbMarkLineData, showClimbLinesOnChart, activeClimbOverlay]);
 
   React.useEffect(() => {
     const a = altInstRef.current;
