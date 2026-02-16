@@ -1985,7 +1985,6 @@ export function FlightDetailsRoute() {
 
   const [settingsOpen, setSettingsOpen] = React.useState(false);
 
-  console.log("settingsOpen =", settingsOpen);
   return (
     <Box p="md">
       <Stack gap="sm">
