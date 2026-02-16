@@ -95,7 +95,6 @@ function MapAutoResize({ watchKey }: { watchKey?: unknown }) {
     return null;
 }
 
-
 function ActiveClimbLayer({
     fixesFull,
     activeClimb,
@@ -109,6 +108,8 @@ function ActiveClimbLayer({
 }) {
     const map = useMap();
     const lineRef = React.useRef<L.Polyline | null>(null);
+
+    // ✅ IMPORTANT: ref must be in component body (not inside effects)
     const lastFocusRef = React.useRef<number>(-1);
 
     // create once
@@ -192,7 +193,7 @@ function ActiveClimbLayer({
             if (forced) {
                 map.fitBounds(segBounds, {
                     padding: [FOLLOW_FIT_PADDING, FOLLOW_FIT_PADDING],
-                    maxZoom: curZoom,       // ✅ no zoom-in
+                    maxZoom: curZoom, // ✅ no zoom-in
                     animate: true,
                 });
             } else {
@@ -202,12 +203,10 @@ function ActiveClimbLayer({
         } catch {
             // ignore
         }
-
     }, [map, fixesFull, activeClimb, watchKey, focusKey]);
 
     return null;
 }
-
 
 function FitBoundsController({
     fullBounds,
@@ -238,41 +237,26 @@ function FitBoundsController({
         if (isDragging) return;
         if (activeClimb) return;
 
-        // Decide what we want to fit to:
-        // - If win exists: only fit if autoFitSelection is enabled
-        // - Else: fit to full bounds (e.g. reset or initial)
         const targetBounds = win ? windowBounds : fullBounds;
         if (!targetBounds) return;
 
-        if (win && !autoFitSelection) {
-            // user has selection, but auto-fit disabled => don't move map
-            return;
-        }
+        if (win && !autoFitSelection) return;
 
-        // Build a stable "reason key" that changes ONLY when we truly want to refit.
-        // - For window: depends on committed window values
-        // - For full: depends on watchKey (flight/map base change), not on UI toggles
-        const key = win
-            ? `win:${Math.round(win.startSec)}-${Math.round(win.endSec)}`
-            : `full:${String(watchKey ?? "")}`;
+        const key = win ? `win:${Math.round(win.startSec)}-${Math.round(win.endSec)}` : `full:${String(watchKey ?? "")}`;
 
         if (lastKeyRef.current === key) return;
         lastKeyRef.current = key;
 
-        // Debounce (optional but helps perceived snappiness when multiple setStates happen)
         if (tRef.current != null) window.clearTimeout(tRef.current);
 
         tRef.current = window.setTimeout(() => {
             tRef.current = null;
 
-            // ✅ Skip if the map already "basically" contains the target.
-            // This avoids pointless fitBounds calls when bounds didn't materially change.
             try {
                 const current = map.getBounds();
                 const target = L.latLngBounds(targetBounds as any);
 
-                // inflate a tiny bit so we don't refit for minuscule differences
-                const inflated = current.pad(-0.02); // negative shrinks (stricter). use +0.02 to loosen.
+                const inflated = current.pad(-0.02);
                 const alreadyOk = inflated.isValid() && target.isValid() && inflated.contains(target);
 
                 if (alreadyOk) return;
@@ -280,7 +264,6 @@ function FitBoundsController({
                 // ignore and fit anyway
             }
 
-            // ✅ For auto/system fits: keep it non-animated (much cheaper and feels snappier)
             map.fitBounds(targetBounds, { padding: [18, 18], animate: false });
         }, 80);
 
@@ -292,7 +275,6 @@ function FitBoundsController({
 
     return null;
 }
-
 
 function ZoomWatcher({ onZoom }: { onZoom: (z: number) => void }) {
     const lastRef = React.useRef<number | null>(null);
@@ -361,8 +343,6 @@ function colorForVario(v: number) {
     }
 }
 
-
-
 function computeBounds(points: LatLngTuple[]): LatLngBoundsExpression | null {
     if (points.length < 2) return null;
     return points as unknown as LatLngBoundsExpression;
@@ -398,7 +378,6 @@ function ActiveTrackLayer({
     const lineRef = React.useRef<L.Polyline | null>(null);
 
     React.useEffect(() => {
-        // base track high-ish, but BELOW hover marker
         ensurePane(map, paneName, paneName === "trackDrag" ? 820 : 650);
 
         if (lineRef.current) return;
@@ -535,7 +514,6 @@ function ColorChunkRangesLayer({
             const pts = ensurePts(i);
             pts.length = 0;
 
-            // fill pooled array with references to precomputed tuples
             const from = Math.max(0, Math.min(r.fromIdx, latlngs.length - 1));
             const to = Math.max(0, Math.min(r.toIdx, latlngs.length - 1));
 
@@ -551,9 +529,6 @@ function ColorChunkRangesLayer({
 
         for (let i = ranges.length; i < coreRef.current.length; i++) coreRef.current[i]?.remove();
         coreRef.current.length = ranges.length;
-
-        // keep pool arrays; we can keep them to reuse later (optional)
-        // ptsPoolRef.current.length = Math.max(ptsPoolRef.current.length, ranges.length);
     }, [latlngs, ranges, outlineWeight, outlineOpacity, line, paneName]);
 
     return null;
@@ -612,11 +587,9 @@ function HoverMarker({ fixes, followEnabled }: { fixes: FixPoint[]; followEnable
             const n = fixes.length;
             if (n < 2) return null;
 
-            // clamp to ends
             if (tSec <= fixes[0].tSec) return [fixes[0].lat, fixes[0].lon];
             if (tSec >= fixes[n - 1].tSec) return [fixes[n - 1].lat, fixes[n - 1].lon];
 
-            // binary search: find i such that fixes[i].tSec <= t < fixes[i+1].tSec
             let lo = 0;
             let hi = n - 1;
             while (lo < hi) {
@@ -648,7 +621,6 @@ function HoverMarker({ fixes, followEnabled }: { fixes: FixPoint[]; followEnable
     React.useEffect(() => {
         if (coreRef.current || haloRef.current) return;
 
-        // ALWAYS on top
         ensurePane(map, "hoverMarker", 1200);
 
         const halo = L.circleMarker([0, 0], {
@@ -675,7 +647,6 @@ function HoverMarker({ fixes, followEnabled }: { fixes: FixPoint[]; followEnable
         halo.addTo(map);
         core.addTo(map);
 
-        // double-safety: force draw order
         halo.bringToFront();
         core.bringToFront();
 
@@ -704,17 +675,14 @@ function HoverMarker({ fixes, followEnabled }: { fixes: FixPoint[]; followEnable
                 return;
             }
 
-            // keep on top
             halo.bringToFront();
             core.bringToFront();
 
-            // if no target: hide markers and stop
             if (!target) {
                 halo.setStyle({ opacity: 0, fillOpacity: 0 });
                 core.setStyle({ opacity: 0, fillOpacity: 0 });
                 currentRef.current = null;
 
-                // stop map follow too
                 mapTargetCenterRef.current = null;
                 mapCurrentCenterRef.current = null;
 
@@ -722,22 +690,18 @@ function HoverMarker({ fixes, followEnabled }: { fixes: FixPoint[]; followEnable
                 return;
             }
 
-            // show markers
             halo.setStyle({ opacity: 1, fillOpacity: 0.35 });
             core.setStyle({ opacity: 1, fillOpacity: 1 });
 
-            // current init
             let cur = currentRef.current;
             if (!cur) cur = target;
 
-            // smooth toward target (marker)
             const next: LatLngTuple = [lerp(cur[0], target[0], MARKER_K), lerp(cur[1], target[1], MARKER_K)];
 
             currentRef.current = next;
             halo.setLatLng(next);
             core.setLatLng(next);
 
-            // follow logic: decide whether we need to move/zoom the map
             if (followRef.current) {
                 const now = Date.now();
                 if (now - lastPanAtRef.current >= 120) {
@@ -754,7 +718,10 @@ function HoverMarker({ fixes, followEnabled }: { fixes: FixPoint[]; followEnable
                     const safeSE = L.point(se.x - marginPx, se.y - marginPx);
 
                     if (safeSE.x > safeNW.x && safeSE.y > safeNW.y) {
-                        const safeBounds = L.latLngBounds(map.containerPointToLatLng(safeNW), map.containerPointToLatLng(safeSE));
+                        const safeBounds = L.latLngBounds(
+                            map.containerPointToLatLng(safeNW),
+                            map.containerPointToLatLng(safeSE)
+                        );
 
                         if (!safeBounds.contains(ll)) {
                             const viewB = map.getBounds();
@@ -763,7 +730,8 @@ function HoverMarker({ fixes, followEnabled }: { fixes: FixPoint[]; followEnable
                             const size = map.getSize();
 
                             const edgePad = 12;
-                            const nearOrOutside = p.x < edgePad || p.y < edgePad || p.x > size.x - edgePad || p.y > size.y - edgePad;
+                            const nearOrOutside =
+                                p.x < edgePad || p.y < edgePad || p.x > size.x - edgePad || p.y > size.y - edgePad;
 
                             if (!viewB.contains(ll) || nearOrOutside) {
                                 const z = map.getZoom();
@@ -813,7 +781,6 @@ function HoverMarker({ fixes, followEnabled }: { fixes: FixPoint[]; followEnable
                 mapCurrentCenterRef.current = null;
             }
 
-            // ✅ Smooth map center toward target (if any)
             const mapTarget = mapTargetCenterRef.current;
             if (followRef.current && mapTarget) {
                 let curC = mapCurrentCenterRef.current;
@@ -825,7 +792,6 @@ function HoverMarker({ fixes, followEnabled }: { fixes: FixPoint[]; followEnable
                 map.setView(nextC, map.getZoom(), { animate: false });
             }
 
-            // stop when close enough (marker), but keep running if map is still lerping
             const dLat = Math.abs(next[0] - target[0]);
             const dLon = Math.abs(next[1] - target[1]);
             const closeEnough = dLat < 1e-7 && dLon < 1e-7;
@@ -846,7 +812,6 @@ function HoverMarker({ fixes, followEnabled }: { fixes: FixPoint[]; followEnable
         rafRef.current = requestAnimationFrame(step);
     }, [map]);
 
-    // ✅ subscribe to hover store: set target only
     React.useEffect(() => {
         const unsub = useFlightHoverStore.subscribe((state) => {
             const t = state.hoverTSec;
@@ -893,16 +858,12 @@ function dragStyleForZoomTopoGlow(z: number) {
     };
 }
 
-
 function buildChunkRangesFromSegColors(segColors: string[], startIdx: number, endIdx: number): ChunkRange[] {
-    // segments are [0..n-2], points are [0..n-1]
-    // window points: startIdx..endIdx (inclusive)
-    // segments in window: startIdx..endIdx-1
     if (!segColors.length) return [];
     if (endIdx <= startIdx) return [];
 
-    const s = Math.max(0, Math.min(startIdx, segColors.length));       // segment start
-    const e = Math.max(0, Math.min(endIdx - 1, segColors.length - 1)); // segment end
+    const s = Math.max(0, Math.min(startIdx, segColors.length));
+    const e = Math.max(0, Math.min(endIdx - 1, segColors.length - 1));
 
     if (e < s) return [];
 
@@ -913,19 +874,16 @@ function buildChunkRangesFromSegColors(segColors: string[], startIdx: number, en
     for (let i = s + 1; i <= e; i++) {
         const c = segColors[i];
         if (c !== runColor) {
-            // segments runStartSeg..(i-1) => points runStartSeg..i
             out.push({ color: runColor, fromIdx: runStartSeg, toIdx: i });
             runColor = c;
             runStartSeg = i;
         }
     }
 
-    // tail: runStartSeg..e => points runStartSeg..(e+1)
     out.push({ color: runColor, fromIdx: runStartSeg, toIdx: e + 1 });
 
     return out;
 }
-
 
 type FlightMapProps = {
     watchKey?: unknown;
@@ -937,18 +895,10 @@ type FlightMapProps = {
 };
 
 export const FlightMap = React.memo(
-    function FlightMap({
-        watchKey,
-        focusKey = 0, // ✅ neu
-        fixesFull,
-        fixesLite,
-        thermals,
-        activeClimb = null,
-    }: FlightMapProps) {
+    function FlightMap({ watchKey, focusKey = 0, fixesFull, fixesLite, thermals, activeClimb = null }: FlightMapProps) {
         const baseMap = useFlightDetailsUiStore((s) => s.baseMap);
         const followEnabled = useFlightDetailsUiStore((s) => s.followEnabled);
         const showThermalsOnMap = useFlightDetailsUiStore((s) => s.showThermalsOnMap);
-
 
         const hasTrack = fixesFull.length >= 2;
         const initialZoom = hasTrack ? 13 : 11;
@@ -961,9 +911,7 @@ export const FlightMap = React.memo(
 
         const windConfig = useWindConfigStore((s) => s.config);
 
-        // Adapter: FixPoint -> WindFix (avoid type coupling)
         const windFixes = React.useMemo(() => fixesFull.map(({ tSec, lat, lon }) => ({ tSec, lat, lon })), [fixesFull]);
-
 
         const pre = React.useMemo(() => {
             const n = fixesFull.length;
@@ -972,7 +920,6 @@ export const FlightMap = React.memo(
             const latlngs = new Array<LatLngTuple>(n);
             for (let i = 0; i < n; i++) latlngs[i] = [fixesFull[i].lat, fixesFull[i].lon];
 
-            // color per segment i -> i+1
             const segColors = new Array<string>(n - 1);
             let lastV = 0;
 
@@ -989,16 +936,10 @@ export const FlightMap = React.memo(
             return { latlngs, segColors };
         }, [fixesFull]);
 
-
-
-
-        // Adapter: TimeWindow -> WindRange (avoid type coupling)
         const windRange = React.useMemo(() => {
             if (!win) return null;
             return { startSec: win.startSec, endSec: win.endSec };
         }, [win]);
-
-
 
         const windowBounds = React.useMemo(() => {
             if (!win) return null;
@@ -1018,10 +959,14 @@ export const FlightMap = React.memo(
 
         const baseFullPoints = fullPoints;
 
+        // ✅ physical total from fixes
         const totalSeconds = fixesFull.length ? fixesFull[fixesFull.length - 1].tSec : 0;
+
+        // ✅ UI total: prefer stored totalSec (keeps slider/charts aligned when you switched to win?.totalSec)
+        const uiTotalSec = win?.totalSec ?? totalSeconds;
+
         const wind = useWindEstimate(windFixes, windRange ?? { startSec: 0, endSec: totalSeconds }, windConfig);
 
-        // window is Source-of-Truth (from store), fallback to full range
         const startSec = win?.startSec ?? 0;
         const endSec = win?.endSec ?? totalSeconds;
 
@@ -1044,6 +989,28 @@ export const FlightMap = React.memo(
             return buildChunkRangesFromSegColors(pre.segColors, startIdx, endIdx);
         }, [hasTrack, isDragging, pre.segColors, startIdx, endIdx]);
 
+        // ✅ active climb range (seconds) for slider highlight
+        const activeClimbRange = React.useMemo(() => {
+            if (!activeClimb || fixesFull.length < 2) return null;
+
+            const sIdx = clamp(activeClimb.startIdx, 0, fixesFull.length - 1);
+            const eIdx = clamp(activeClimb.endIdx, 0, fixesFull.length - 1);
+
+            const s = fixesFull[sIdx]?.tSec;
+            const e = fixesFull[eIdx]?.tSec;
+
+            if (!Number.isFinite(s) || !Number.isFinite(e)) return null;
+
+            const a = Math.min(s as number, e as number);
+            const b = Math.max(s as number, e as number);
+
+            // clamp to UI total (just in case)
+            return {
+                startSec: clamp(a, 0, uiTotalSec),
+                endSec: clamp(b, 0, uiTotalSec),
+            };
+        }, [activeClimb, fixesFull, uiTotalSec]);
+
         const center: LatLngTuple = fullPoints.length ? fullPoints[0] : [48.1372, 11.5756];
         const bounds = React.useMemo(() => computeBounds(fullPoints), [fullPoints]);
 
@@ -1054,51 +1021,73 @@ export const FlightMap = React.memo(
 
         const tile = TILE[baseMap];
 
-        const startPct = pct(startSec, totalSeconds);
-        const endPct = pct(endSec, totalSeconds);
+        // ✅ use uiTotalSec for UI percentages
+        const startPct = pct(startSec, uiTotalSec);
+        const endPct = pct(endSec, uiTotalSec);
 
         return (
             <Box style={{ display: "flex", flexDirection: "column", height: "100%" }}>
                 <Group justify="space-between" mb="xs">
                     <Text fw={600}>Flight window</Text>
                     <Text c="dimmed">
-                        {startPct}% ({formatTime(startSec)}) → {endPct}% ({formatTime(endSec)}) / {formatTime(totalSeconds)}
+                        {startPct}% ({formatTime(startSec)}) → {endPct}% ({formatTime(endSec)}) / {formatTime(uiTotalSec)}
                     </Text>
                 </Group>
 
-                <RangeSlider
-                    value={[startSec, endSec]}
-                    onChange={(v) => {
-                        const a = Math.min(v[0], v[1]);
-                        const b = Math.max(v[0], v[1]);
+                {/* ✅ Slider wrapper (Option A): highlight active climb underneath the handles */}
+                <Box style={{ position: "relative" }}>
+                    {activeClimbRange && uiTotalSec > 0 && activeClimbRange.endSec > activeClimbRange.startSec && (
+                        <Box
+                            style={{
+                                position: "absolute",
+                                left: `${(activeClimbRange.startSec / uiTotalSec) * 100}%`,
+                                width: `${((activeClimbRange.endSec - activeClimbRange.startSec) / uiTotalSec) * 100}%`,
+                                top: 18, // tweak if needed
+                                height: 6,
+                                borderRadius: 6,
+                                background: "rgba(255, 200, 0, 0.65)",
+                                boxShadow: "0 0 0 1px rgba(0,0,0,0.35), 0 0 10px rgba(255, 200, 0, 0.55)",
+                                pointerEvents: "none",
+                                zIndex: 1,
+                            }}
+                        />
+                    )}
 
-                        setDragging(true);
+                    <RangeSlider
+                        style={{ position: "relative", zIndex: 2 }}
+                        value={[startSec, endSec]}
+                        onChange={(v) => {
+                            const a = Math.min(v[0], v[1]);
+                            const b = Math.max(v[0], v[1]);
 
-                        setWindowThrottled({
-                            startSec: a,
-                            endSec: b,
-                            totalSec: totalSeconds,
-                        });
-                    }}
-                    onChangeEnd={(v) => {
-                        const a = Math.min(v[0], v[1]);
-                        const b = Math.max(v[0], v[1]);
+                            setDragging(true);
 
-                        setWindow({
-                            startSec: a,
-                            endSec: b,
-                            totalSec: totalSeconds,
-                        });
+                            setWindowThrottled({
+                                startSec: a,
+                                endSec: b,
+                                totalSec: uiTotalSec, // ✅
+                            });
+                        }}
+                        onChangeEnd={(v) => {
+                            const a = Math.min(v[0], v[1]);
+                            const b = Math.max(v[0], v[1]);
 
-                        setDragging(false);
-                    }}
-                    min={0}
-                    max={totalSeconds}
-                    step={1}
-                    minRange={1}
-                    mb="sm"
-                    label={(v) => `${pct(v, totalSeconds)}%`}
-                />
+                            setWindow({
+                                startSec: a,
+                                endSec: b,
+                                totalSec: uiTotalSec, // ✅
+                            });
+
+                            setDragging(false);
+                        }}
+                        min={0}
+                        max={uiTotalSec} // ✅
+                        step={1}
+                        minRange={1}
+                        mb="sm"
+                        label={(v) => `${pct(v, uiTotalSec)}%`} // ✅
+                    />
+                </Box>
 
                 <Box style={{ flex: 1, minHeight: 0 }}>
                     <MapContainer center={center} zoom={initialZoom} style={{ height: "100%", width: "100%" }} preferCanvas>
@@ -1116,17 +1105,8 @@ export const FlightMap = React.memo(
 
                         {/* ✅ Thermal circles: allow low quality + few points so single turns render */}
                         {showThermalsOnMap && (
-                            <>
-                                <ThermalCirclesLayer
-                                    fixesFull={fixesFull}
-                                    thermals={thermals}
-                                    minQuality={0.05} // was 0.20
-                                    minPts={6} // was 25
-                                    simplifyEveryN={1} // was 2 (don’t kill small circles)
-                                />
-                            </>
+                            <ThermalCirclesLayer fixesFull={fixesFull} thermals={thermals} minQuality={0.05} minPts={6} simplifyEveryN={1} />
                         )}
-
 
                         {/* While dragging: show lite window overlay */}
                         {isDragging && (
@@ -1163,6 +1143,7 @@ export const FlightMap = React.memo(
                             arrowScaleSec={500}
                             minQuality={0.15}
                         />
+
                         {!isDragging && chunkRanges.length > 0 && (
                             <ColorChunkRangesLayer
                                 latlngs={pre.latlngs}
@@ -1174,12 +1155,7 @@ export const FlightMap = React.memo(
                             />
                         )}
 
-                        <ActiveClimbLayer
-                            fixesFull={fixesFull}
-                            activeClimb={activeClimb}
-                            watchKey={watchKey}
-                            focusKey={focusKey}
-                        />
+                        <ActiveClimbLayer fixesFull={fixesFull} activeClimb={activeClimb} watchKey={watchKey} focusKey={focusKey} />
 
                         <ZoomWatcher onZoom={setZoom} />
                         <MapAutoResize watchKey={watchKey} />
@@ -1192,7 +1168,6 @@ export const FlightMap = React.memo(
                             watchKey={watchKey}
                             activeClimb={activeClimb}
                         />
-
                     </MapContainer>
                 </Box>
             </Box>
@@ -1203,12 +1178,11 @@ export const FlightMap = React.memo(
         const nextC = next.activeClimb ?? null;
 
         const sameClimb =
-            prevC === nextC ||
-            (!!prevC && !!nextC && prevC.startIdx === nextC.startIdx && prevC.endIdx === nextC.endIdx);
+            prevC === nextC || (!!prevC && !!nextC && prevC.startIdx === nextC.startIdx && prevC.endIdx === nextC.endIdx);
 
         return (
             prev.watchKey === next.watchKey &&
-            prev.focusKey === next.focusKey && // ✅ neu
+            prev.focusKey === next.focusKey &&
             prev.fixesFull === next.fixesFull &&
             prev.fixesLite === next.fixesLite &&
             prev.thermals === next.thermals &&
