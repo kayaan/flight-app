@@ -352,6 +352,94 @@ function ActiveTrackLayer({
     return null;
 }
 
+function ColorChunksLayer({
+    chunks,
+    outlineWeight,
+    outlineOpacity,
+    line,
+    paneName = "trackColor",
+}: {
+    chunks: Array<{ color: string; positions: LatLngTuple[] }>;
+    outlineWeight: number;
+    outlineOpacity: number;
+    line: number;
+    paneName?: string;
+}) {
+    const map = useMap();
+
+    const groupRef = React.useRef<L.LayerGroup | null>(null);
+    const outlineRef = React.useRef<L.Polyline[]>([]);
+    const coreRef = React.useRef<L.Polyline[]>([]);
+
+    React.useEffect(() => {
+        ensurePane(map, paneName, 700);
+
+        const g = L.layerGroup([], { pane: paneName } as any);
+        g.addTo(map);
+        groupRef.current = g;
+
+        return () => {
+            g.remove();
+            groupRef.current = null;
+            outlineRef.current = [];
+            coreRef.current = [];
+        };
+    }, [map, paneName]);
+
+    React.useEffect(() => {
+        const g = groupRef.current;
+        if (!g) return;
+
+        const OUTLINE = "rgba(0, 0, 0, 0.51)";
+
+        // --- helper: ensure polyline exists at index ---
+        const ensurePoly = (arr: L.Polyline[], i: number, color: string, weight: number, opacity: number) => {
+            let p = arr[i];
+            if (!p) {
+                p = L.polyline([], {
+                    pane: paneName,
+                    color,
+                    weight,
+                    opacity,
+                    lineCap: "round",
+                    lineJoin: "round",
+                    interactive: false,
+                });
+                p.addTo(g);
+                arr[i] = p;
+            } else {
+                p.setStyle({ color, weight, opacity });
+            }
+            return p;
+        };
+
+        // --- update / create ---
+        for (let i = 0; i < chunks.length; i++) {
+            const ch = chunks[i];
+
+            const o = ensurePoly(outlineRef.current, i, OUTLINE, outlineWeight, outlineOpacity);
+            o.setLatLngs(ch.positions);
+
+            const c = ensurePoly(coreRef.current, i, ch.color, line, 0.98);
+            c.setLatLngs(ch.positions);
+        }
+
+        // --- remove extras ---
+        for (let i = chunks.length; i < outlineRef.current.length; i++) {
+            outlineRef.current[i]?.remove();
+        }
+        outlineRef.current.length = chunks.length;
+
+        for (let i = chunks.length; i < coreRef.current.length; i++) {
+            coreRef.current[i]?.remove();
+        }
+        coreRef.current.length = chunks.length;
+    }, [chunks, outlineWeight, outlineOpacity, line, paneName]);
+
+    return null;
+}
+
+
 function HoverMarker({ fixes, followEnabled }: { fixes: FixPoint[]; followEnabled: boolean }) {
     const map = useMap();
 
@@ -894,33 +982,16 @@ export const FlightMap = React.memo(
                             minQuality={0.15}
                         />
 
-                        {/* Colored chunks only when NOT dragging */}
-                        {colorChunks.map((ch, i) => (
-                            <Polyline
-                                key={`o-${i}`}
-                                positions={ch.positions}
-                                pathOptions={{
-                                    color: OUTLINE,
-                                    weight: outlineWeight,
-                                    opacity: outlineOpacity,
-                                    lineCap: "round",
-                                    lineJoin: "round",
-                                }}
+                        {!isDragging && colorChunks.length > 0 && (
+                            <ColorChunksLayer
+                                chunks={colorChunks}
+                                outlineWeight={outlineWeight}
+                                outlineOpacity={outlineOpacity}
+                                line={line}
+                                paneName="trackColor"
                             />
-                        ))}
-                        {colorChunks.map((ch, i) => (
-                            <Polyline
-                                key={`c-${i}`}
-                                positions={ch.positions}
-                                pathOptions={{
-                                    color: ch.color,
-                                    weight: line,
-                                    opacity: 0.98,
-                                    lineCap: "round",
-                                    lineJoin: "round",
-                                }}
-                            />
-                        ))}
+                        )}
+
 
                         <ZoomWatcher onZoom={setZoom} />
                         <MapAutoResize watchKey={watchKey} />
