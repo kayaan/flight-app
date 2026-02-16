@@ -7,7 +7,7 @@
 import * as React from "react";
 import L, { type LatLngTuple, type LatLngBoundsExpression } from "leaflet";
 import "leaflet/dist/leaflet.css";
-import { Box, Group, Text, RangeSlider } from "@mantine/core";
+import { Box, Group, Text } from "@mantine/core";
 import { useFlightHoverStore } from "../store/flightHover.store";
 import { useTimeWindowStore, type TimeWindow } from "../store/timeWindow.store";
 
@@ -19,6 +19,7 @@ import type { FixPoint } from "../igc";
 import { ThermalCirclesLayer } from "./layers/ThermalCirclesLayer";
 import { useFlightDetailsUiStore } from "../store/flightDetailsUi.store";
 import type { ThermalCircle } from "../analysis/turns/detectThermalCircles";
+import { DualRangeSlider } from "./DualRangeSlider";
 
 export type BaseMap = "osm" | "topo";
 
@@ -1035,59 +1036,32 @@ export const FlightMap = React.memo(
                 </Group>
 
                 {/* ✅ Slider wrapper (Option A): highlight active climb underneath the handles */}
-                <Box style={{ position: "relative" }}>
-                    {activeClimbRange && uiTotalSec > 0 && activeClimbRange.endSec > activeClimbRange.startSec && (
-                        <Box
-                            style={{
-                                position: "absolute",
-                                left: `${(activeClimbRange.startSec / uiTotalSec) * 100}%`,
-                                width: `${((activeClimbRange.endSec - activeClimbRange.startSec) / uiTotalSec) * 100}%`,
-                                top: 18, // tweak if needed
-                                height: 6,
-                                borderRadius: 6,
-                                background: "rgba(255, 200, 0, 0.65)",
-                                boxShadow: "0 0 0 1px rgba(0,0,0,0.35), 0 0 10px rgba(255, 200, 0, 0.55)",
-                                pointerEvents: "none",
-                                zIndex: 1,
-                            }}
-                        />
-                    )}
-
-                    <RangeSlider
-                        style={{ position: "relative", zIndex: 2 }}
+                <Box style={{ position: "relative", paddingTop: 6, paddingBottom: 6, paddingLeft: 20, paddingRight: 20, marginBottom: 18 }}>
+                    <DualRangeSlider
+                        min={0}
+                        max={uiTotalSec}
+                        step={1}
                         value={[startSec, endSec]}
-                        onChange={(v) => {
-                            const a = Math.min(v[0], v[1]);
-                            const b = Math.max(v[0], v[1]);
-
+                        highlight={
+                            activeClimbRange
+                                ? { start: activeClimbRange.startSec, end: activeClimbRange.endSec }
+                                : null
+                        }
+                        onChange={([a, b]) => {
+                            const lo = Math.min(a, b);
+                            const hi = Math.max(a, b);
                             setDragging(true);
-
-                            setWindowThrottled({
-                                startSec: a,
-                                endSec: b,
-                                totalSec: uiTotalSec, // ✅
-                            });
+                            setWindowThrottled({ startSec: lo, endSec: hi, totalSec: uiTotalSec });
                         }}
-                        onChangeEnd={(v) => {
-                            const a = Math.min(v[0], v[1]);
-                            const b = Math.max(v[0], v[1]);
-
-                            setWindow({
-                                startSec: a,
-                                endSec: b,
-                                totalSec: uiTotalSec, // ✅
-                            });
-
+                        onChangeEnd={([a, b]) => {
+                            const lo = Math.min(a, b);
+                            const hi = Math.max(a, b);
+                            setWindow({ startSec: lo, endSec: hi, totalSec: uiTotalSec });
                             setDragging(false);
                         }}
-                        min={0}
-                        max={uiTotalSec} // ✅
-                        step={1}
-                        minRange={1}
-                        mb="sm"
-                        label={(v) => `${pct(v, uiTotalSec)}%`} // ✅
                     />
                 </Box>
+
 
                 <Box style={{ flex: 1, minHeight: 0 }}>
                     <MapContainer center={center} zoom={initialZoom} style={{ height: "100%", width: "100%" }} preferCanvas>
