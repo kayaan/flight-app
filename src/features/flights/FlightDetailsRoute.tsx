@@ -12,8 +12,11 @@ import {
   SimpleGrid,
   Paper,
   NumberInput,
+  ActionIcon,
+  Divider,
+  Drawer,
 } from "@mantine/core";
-import { IconAlertCircle } from "@tabler/icons-react";
+import { IconAlertCircle, IconSettings } from "@tabler/icons-react";
 import EChartsReact from "echarts-for-react";
 import * as echarts from "echarts";
 
@@ -70,6 +73,25 @@ function buildActiveRangeMarkLine(range: { startSec: number; endSec: number } | 
   ];
 }
 
+
+function buildClimbLinesSeries(enabled: boolean, climbMarkLineData: any[]) {
+  if (!enabled || !climbMarkLineData?.length) return [];
+  return [
+    {
+      id: "__climbLines",
+      name: "__climbLines",
+      type: "line",
+      data: [],
+      silent: true,
+      z: 9,
+      markLine: {
+        symbol: "none",
+        label: { show: false },
+        data: climbMarkLineData,
+      },
+    },
+  ];
+}
 const axisPointerLabelFormatter = (params: AxisPointerLabelParams) => {
   const v = params.value as any;
 
@@ -612,8 +634,6 @@ export function FlightDetailsRoute() {
   const draggingRef = React.useRef(false);
   const [splitPct, setSplitPct] = React.useState<number>(60);
 
-
-  // ✅ neu (bei den anderen UI-store selects)
   const showClimbLinesOnChart = useFlightDetailsUiStore((s) => s.showClimbLinesOnChart);
   const showThermalsOnMap = useFlightDetailsUiStore((s) => s.showThermalsOnMap);
 
@@ -1063,22 +1083,8 @@ export function FlightDetailsRoute() {
             },
           },
         },
+        ...buildClimbLinesSeries(showClimbLinesOnChart, climbMarkLineData),
         ...buildActiveRangeMarkLine(activeRange),
-        {
-          id: "__climbs",
-          name: "__climbs",
-          type: "line",
-          data: [],
-          silent: true,
-          markLine: {
-            symbol: "none",
-            label: { show: false },
-            animation: false,
-            silent: true,
-            // ✅ wenn toggle aus: leere data => keine Linien
-            data: showClimbLinesOnChart ? climbMarkLineData : [],
-          },
-        },
       ],
     };
   }, [chartData, baseOption, windowMarkLine, climbMarkLineData, showClimbLinesOnChart, activeClimbOverlay, activeRange]);
@@ -1170,22 +1176,8 @@ export function FlightDetailsRoute() {
             },
           },
         },
+        ...buildClimbLinesSeries(showClimbLinesOnChart, climbMarkLineData),
         ...buildActiveRangeMarkLine(activeRange),
-        {
-          id: "__climbs",
-          name: "__climbs",
-          type: "line",
-          data: [],
-          silent: true,
-          markLine: {
-            symbol: "none",
-            label: { show: false },
-            animation: false,
-            silent: true,
-            // ✅ wenn toggle aus: leere data => keine Linien
-            data: showClimbLinesOnChart ? climbMarkLineData : [],
-          },
-        },
       ],
     };
   }, [chartData, baseOption, windowMarkLine, varioWindowSec, activeRange, climbMarkLineData, showClimbLinesOnChart, activeClimbOverlay]);
@@ -1269,22 +1261,8 @@ export function FlightDetailsRoute() {
             }
             : undefined,
         },
+        ...buildClimbLinesSeries(showClimbLinesOnChart, climbMarkLineData),
         ...buildActiveRangeMarkLine(activeRange),
-        {
-          id: "__climbs",
-          name: "__climbs",
-          type: "line",
-          data: [],
-          silent: true,
-          markLine: {
-            symbol: "none",
-            label: { show: false },
-            animation: false,
-            silent: true,
-            // ✅ wenn toggle aus: leere data => keine Linien
-            data: showClimbLinesOnChart ? climbMarkLineData : [],
-          },
-        },
       ],
     };
   }, [chartData, baseOption, windowMarkLine, activeRange, climbMarkLineData, showClimbLinesOnChart, activeClimbOverlay]);
@@ -2005,127 +1983,197 @@ export function FlightDetailsRoute() {
   const mapFixesLite = computedWithLite?.fixesLite ?? EMPTY_FIXES;
   const mapThermals = thermals ?? EMPTY_THERMALS;
 
+  const [settingsOpen, setSettingsOpen] = React.useState(false);
 
+  console.log("settingsOpen =", settingsOpen);
   return (
     <Box p="md">
       <Stack gap="sm">
-        <Group justify="space-between">
-          <Button variant="light" onClick={() => window.history.back()}>
-            Back
-          </Button>
+        {/* HEADER */}
+        <Group justify="space-between" align="center" wrap="nowrap">
+          <Group gap="md" align="center" wrap="nowrap">
+            <Button variant="light" onClick={() => window.history.back()}>
+              ← Back
+            </Button>
 
-          <Group gap="md" align="center">
+            <Group gap="xs" align="center" wrap="nowrap">
+              <Button size="xs" variant="subtle" onClick={prevClimb} disabled={!hasClimbs}>
+                ◀
+              </Button>
 
-            <Button
-              size="xs"
-              variant="light"
-              onClick={prevClimb}
-              disabled={!hasClimbs}
-            >
-              Prev climb
+              <Text size="sm" fw={600} style={{ minWidth: 110, textAlign: "center" }}>
+                {climbNavActive
+                  ? `Climb ${activeClimbIndex! + 1} / ${climbs.length}`
+                  : hasClimbs
+                    ? `${climbs.length} climbs`
+                    : "No climbs"}
+              </Text>
+
+              <Button size="xs" variant="subtle" onClick={nextClimb} disabled={!hasClimbs}>
+                ▶
+              </Button>
+
+              <Button size="xs" variant="subtle" onClick={clearActiveClimb} disabled={!climbNavActive}>
+                ✕
+              </Button>
+            </Group>
+          </Group>
+
+          <Group gap="xs" align="center" wrap="nowrap">
+            <Button size="xs" variant={followEnabled ? "filled" : "light"} onClick={() => setFollowEnabled(!followEnabled)}>
+              Follow
             </Button>
 
             <Button
               size="xs"
-              variant="light"
-              onClick={nextClimb}
-              disabled={!hasClimbs}
+              variant={zoomSyncEnabled ? "filled" : "light"}
+              onClick={() => setZoomSyncEnabled(!zoomSyncEnabled)}
             >
-              Next climb
+              Sync Zoom
             </Button>
 
-            <Button
-              size="xs"
+            <Button size="xs" variant={syncEnabled ? "filled" : "light"} onClick={() => setSyncEnabled(!syncEnabled)}>
+              Sync Charts
+            </Button>
+
+            <Button size="xs" variant={showStats ? "filled" : "light"} onClick={() => setShowStats(!showStats)}>
+              Stats
+            </Button>
+
+            <ActionIcon
               variant="subtle"
-              onClick={clearActiveClimb}
-              disabled={!climbNavActive}
+              size="lg"
+              onClick={() => setSettingsOpen(true)}
+              aria-label="Settings"
             >
-              Clear climb
-            </Button>
+              <IconSettings size={18} />
+            </ActionIcon>
+          </Group>
+        </Group>
 
-            <Text size="xs" c="dimmed" style={{ minWidth: 110, textAlign: "right" }}>
-              {climbNavActive
-                ? `Climb ${activeClimbIndex! + 1} / ${climbs.length}`
-                : hasClimbs
-                  ? `${climbs.length} climbs`
-                  : "No climbs"}
-            </Text>
+        {/* SETTINGS DRAWER (overlay, should NOT push layout) */}
+        <Drawer
+          opened={settingsOpen}
+          onClose={() => setSettingsOpen(false)}
+          title="Settings"
+          position="right"
+          size="sm"
+          padding="md"
+          withCloseButton
+          withinPortal
+          zIndex={3000}
+          overlayProps={{ opacity: 0.35, blur: 2 }}
+        >
+          <Stack gap="md">
+            {/* Charts */}
+            <Box>
+              <Text fw={600} size="sm" mb={6}>
+                Charts
+              </Text>
 
-            <Checkbox
-              label="Climb lines"
-              checked={showClimbLinesOnChart}
-              onChange={(e) => setShowClimbLinesOnChart(e.currentTarget.checked)}
-            />
+              <Group gap="xs">
+                <Button
+                  size="xs"
+                  variant={showAlt ? "filled" : "light"}
+                  onClick={() => {
+                    const next = !showAlt;
+                    setShowAlt(next);
+                    if (!next) {
+                      altInstRef.current = null;
+                      setChartReady((r) => ({ ...r, alt: false }));
+                      setChartsReadyTick((x) => x + 1);
+                    }
+                  }}
+                >
+                  Alt
+                </Button>
 
-            <Checkbox
-              label="Thermals"
-              checked={showThermalsOnMap}
-              onChange={(e) => setShowThermalsOnMap(e.currentTarget.checked)}
-            />
+                <Button
+                  size="xs"
+                  variant={showVario ? "filled" : "light"}
+                  onClick={() => {
+                    const next = !showVario;
+                    setShowVario(next);
+                    if (!next) {
+                      varioInstRef.current = null;
+                      setChartReady((r) => ({ ...r, vario: false }));
+                      setChartsReadyTick((x) => x + 1);
+                    }
+                  }}
+                >
+                  Vario
+                </Button>
 
-            <Checkbox label="Auto fit" checked={autoFitSelection} onChange={(e) => setAutoFitSelectionUi(e.currentTarget.checked)} />
+                <Button
+                  size="xs"
+                  variant={showSpeed ? "filled" : "light"}
+                  onClick={() => {
+                    const next = !showSpeed;
+                    setShowSpeed(next);
+                    if (!next) {
+                      speedInstRef.current = null;
+                      setChartReady((r) => ({ ...r, speed: false }));
+                      setChartsReadyTick((x) => x + 1);
+                    }
+                  }}
+                >
+                  Speed
+                </Button>
+              </Group>
 
-            <Checkbox label="Sync chart zoom" checked={zoomSyncEnabled} onChange={(e) => setZoomSyncEnabled(e.currentTarget.checked)} />
+              <Divider my="sm" />
 
-            <Button size="xs" variant="light" onClick={resetSelection} disabled={!win}>
-              Reset selection
-            </Button>
+              {/* Overlays */}
+              <Text fw={600} size="sm" mb={6}>
+                Overlays
+              </Text>
 
-            <Checkbox
-              label="Topo"
-              checked={baseMap === "topo"}
-              onChange={(e) => setBaseMap((e.currentTarget.checked ? "topo" : "osm") as UiBaseMap)}
-            />
+              <Stack gap="xs">
+                <Checkbox
+                  label="Climb lines"
+                  checked={showClimbLinesOnChart}
+                  onChange={(e) => setShowClimbLinesOnChart(e.currentTarget.checked)}
+                />
 
-            <Button size="xs" variant="light" onClick={zoomChartsToWindow} disabled={zoomDisabled}>
-              Zoom to window
-            </Button>
+                <Checkbox
+                  label="Thermals"
+                  checked={showThermalsOnMap}
+                  onChange={(e) => setShowThermalsOnMap(e.currentTarget.checked)}
+                />
 
-            <Checkbox label="Charts sync" checked={syncEnabled} onChange={(e) => setSyncEnabled(e.currentTarget.checked)} />
-            <Checkbox label="Follow marker" checked={followEnabled} onChange={(e) => setFollowEnabled(e.currentTarget.checked)} />
-            <Checkbox label="Show stats" checked={showStats} onChange={(e) => setShowStats(e.currentTarget.checked)} />
+                <Checkbox
+                  label="Auto fit selection"
+                  checked={autoFitSelection}
+                  onChange={(e) => setAutoFitSelectionUi(e.currentTarget.checked)}
+                />
+              </Stack>
 
-            <Checkbox
-              label="Alt"
-              checked={showAlt}
-              onChange={(e) => {
-                const next = e.currentTarget.checked;
-                setShowAlt(next);
-                if (!next) {
-                  altInstRef.current = null;
-                  setChartReady((r) => ({ ...r, alt: false }));
-                  setChartsReadyTick((x) => x + 1);
-                }
-              }}
-            />
+              <Divider my="sm" />
 
-            <Checkbox
-              label="Vario"
-              checked={showVario}
-              onChange={(e) => {
-                const next = e.currentTarget.checked;
-                setShowVario(next);
-                if (!next) {
-                  varioInstRef.current = null;
-                  setChartReady((r) => ({ ...r, vario: false }));
-                  setChartsReadyTick((x) => x + 1);
-                }
-              }}
-            />
+              {/* Map */}
+              <Text fw={600} size="sm" mb={6}>
+                Map
+              </Text>
 
-            <Checkbox
-              label="Speed"
-              checked={showSpeed}
-              onChange={(e) => {
-                const next = e.currentTarget.checked;
-                setShowSpeed(next);
-                if (!next) {
-                  speedInstRef.current = null;
-                  setChartReady((r) => ({ ...r, speed: false }));
-                  setChartsReadyTick((x) => x + 1);
-                }
-              }}
-            />
+              <Checkbox
+                label="Topo"
+                checked={baseMap === "topo"}
+                onChange={(e) => setBaseMap((e.currentTarget.checked ? "topo" : "osm") as UiBaseMap)}
+              />
+            </Box>
+
+            <Divider />
+
+            {/* Actions */}
+            <Group justify="space-between">
+              <Button size="xs" variant="light" onClick={resetSelection} disabled={!win}>
+                Reset selection
+              </Button>
+
+              <Button size="xs" variant="light" onClick={zoomChartsToWindow} disabled={zoomDisabled}>
+                Zoom to window
+              </Button>
+            </Group>
 
             <NumberInput
               label="Vario win (s)"
@@ -2134,13 +2182,12 @@ export function FlightDetailsRoute() {
               min={1}
               max={30}
               step={1}
-              w={140}
-              size="xs"
-              styles={{ label: { marginBottom: 2 } }}
+              size="sm"
             />
-          </Group>
-        </Group>
+          </Stack>
+        </Drawer>
 
+        {/* BODY */}
         {busy && <Text c="dimmed">Loading...</Text>}
 
         {error && (
@@ -2194,6 +2241,7 @@ export function FlightDetailsRoute() {
                       option={altOption}
                       style={{ height: "100%", width: "100%" }}
                       notMerge={false}
+                      replaceMerge={["series"]}
                       onChartReady={(inst) => {
                         altInstRef.current = inst;
                         inst.group = chartGroupId;
@@ -2215,6 +2263,7 @@ export function FlightDetailsRoute() {
                       option={varioOption}
                       style={{ height: "100%", width: "100%" }}
                       notMerge={false}
+                      replaceMerge={["series"]}
                       onChartReady={(inst) => {
                         varioInstRef.current = inst;
                         inst.group = chartGroupId;
@@ -2236,6 +2285,7 @@ export function FlightDetailsRoute() {
                       option={speedOption}
                       style={{ height: "100%", width: "100%" }}
                       notMerge={false}
+                      replaceMerge={["series"]}
                       onChartReady={(inst) => {
                         speedInstRef.current = inst;
                         inst.group = chartGroupId;
@@ -2291,5 +2341,6 @@ export function FlightDetailsRoute() {
         )}
       </Stack>
     </Box>
+
   );
 }
