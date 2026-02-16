@@ -28,7 +28,7 @@ import { useFlightHoverStore } from "./store/flightHover.store";
 import { useTimeWindowStore } from "./store/timeWindow.store";
 import { detectClimbPhases } from "./analysis/turns/detectClimbPhases";
 import { useFlightDetailsUiStore, type BaseMap as UiBaseMap } from "./store/flightDetailsUi.store";
-import { detectThermalCirclesInClimbs } from "./analysis/turns/detectThermalCircles";
+import { detectThermalCirclesInClimbs, type ThermalCircle } from "./analysis/turns/detectThermalCircles";
 
 interface AxisPointerLabelParams {
   value: number | string | Date;
@@ -96,6 +96,8 @@ const ALT_AXIS_POINTER = {
 } as const;
 
 const ALT_GRID = { left: 56, right: 16, top: 24, bottom: 40 } as const;
+const EMPTY_FIXES: FixPoint[] = [];
+const EMPTY_THERMALS: ThermalCircle[] = [];
 
 const ALT_DATAZOOM = [
   { id: "dz_inside_alt", type: "inside", xAxisIndex: 0, moveOnMouseMove: true },
@@ -1620,6 +1622,10 @@ export function FlightDetailsRoute() {
   }, [showAlt, showVario, showSpeed, chartsReadyTick, attachRangeSelect]);
 
 
+  const mapFixesFull = computedWithLite?.fixesFull ?? EMPTY_FIXES;
+  const mapFixesLite = computedWithLite?.fixesLite ?? EMPTY_FIXES;
+  const mapThermals = thermals ?? EMPTY_THERMALS;
+
 
   return (
     <Box p="md">
@@ -1859,11 +1865,10 @@ export function FlightDetailsRoute() {
               </Text>
               <Box style={{ flex: 1, minHeight: 0 }}>
                 <FlightMap
-                  fixesFull={computedWithLite?.fixesFull ?? []}
-                  fixesLite={computedWithLite?.fixesLite ?? []}
-                  thermals={thermals}
+                  fixesFull={mapFixesFull}
+                  fixesLite={mapFixesLite}
+                  thermals={mapThermals}
                   watchKey={`${id}-${baseMap}`}
-
                 />
               </Box>
             </Box>

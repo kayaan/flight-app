@@ -686,259 +686,272 @@ function dragStyleForZoomTopoGlow(z: number) {
     };
 }
 
-export function FlightMap({
-    watchKey,
-    fixesFull,
-    fixesLite,
-    thermals,
-}: {
+type FlightMapProps = {
     watchKey?: unknown;
     fixesFull: FixPoint[];
     fixesLite: FixPoint[];
-    thermals: ThermalCircle[];  // besser: ThermalCircle[] importieren, wenn du den Typ exportiert hast
-}) {
-
-    const baseMap = useFlightDetailsUiStore((s) => s.baseMap);
-    const followEnabled = useFlightDetailsUiStore((s) => s.followEnabled);
-    const showThermalsOnMap = useFlightDetailsUiStore((s) => s.showThermalsOnMap);
+    thermals: ThermalCircle[];
+};
 
 
-    const hasTrack = fixesFull.length >= 2;
-    const initialZoom = hasTrack ? 13 : 11;
+export const FlightMap = React.memo(
+    function FlightMap({
+        watchKey,
+        fixesFull,
+        fixesLite,
+        thermals,
+    }: FlightMapProps) {
 
-    const win = useTimeWindowStore((s) => s.window);
-    const setWindowThrottled = useTimeWindowStore((s) => s.setWindowThrottled);
-    const setWindow = useTimeWindowStore((s) => s.setWindow);
-    const isDragging = useTimeWindowStore((s) => s.isDragging);
-    const setDragging = useTimeWindowStore((s) => s.setDragging);
-
-    const windConfig = useWindConfigStore((s) => s.config);
-
-    // Adapter: FixPoint -> WindFix (avoid type coupling)
-    const windFixes = React.useMemo(() => fixesFull.map(({ tSec, lat, lon }) => ({ tSec, lat, lon })), [fixesFull]);
-
-    // Adapter: TimeWindow -> WindRange (avoid type coupling)
-    const windRange = React.useMemo(() => {
-        if (!win) return null;
-        return { startSec: win.startSec, endSec: win.endSec };
-    }, [win]);
+        const baseMap = useFlightDetailsUiStore((s) => s.baseMap);
+        const followEnabled = useFlightDetailsUiStore((s) => s.followEnabled);
+        const showThermalsOnMap = useFlightDetailsUiStore((s) => s.showThermalsOnMap);
 
 
+        const hasTrack = fixesFull.length >= 2;
+        const initialZoom = hasTrack ? 13 : 11;
 
-    const windowBounds = React.useMemo(() => {
-        if (!win) return null;
-        const src = fixesLite && fixesLite.length >= 2 ? fixesLite : fixesFull;
-        const pts = sliceFixesByWindow(src, win.startSec, win.endSec);
-        return pts.length >= 2 ? computeBounds(pts) : null;
-    }, [win, fixesLite, fixesFull]);
+        const win = useTimeWindowStore((s) => s.window);
+        const setWindowThrottled = useTimeWindowStore((s) => s.setWindowThrottled);
+        const setWindow = useTimeWindowStore((s) => s.setWindow);
+        const isDragging = useTimeWindowStore((s) => s.isDragging);
+        const setDragging = useTimeWindowStore((s) => s.setDragging);
 
-    const [zoom, setZoom] = React.useState<number>(initialZoom);
-    React.useEffect(() => setZoom(initialZoom), [initialZoom]);
+        const windConfig = useWindConfigStore((s) => s.config);
 
-    const fullPoints = React.useMemo(() => {
-        const out = new Array<LatLngTuple>(fixesFull.length);
-        for (let i = 0; i < fixesFull.length; i++) out[i] = [fixesFull[i].lat, fixesFull[i].lon];
-        return out;
-    }, [fixesFull]);
+        // Adapter: FixPoint -> WindFix (avoid type coupling)
+        const windFixes = React.useMemo(() => fixesFull.map(({ tSec, lat, lon }) => ({ tSec, lat, lon })), [fixesFull]);
 
-    const baseFullPoints = fullPoints;
-
-    const totalSeconds = fixesFull.length ? fixesFull[fixesFull.length - 1].tSec : 0;
-    const wind = useWindEstimate(windFixes, windRange ?? { startSec: 0, endSec: totalSeconds }, windConfig);
-
-    // window is Source-of-Truth (from store), fallback to full range
-    const startSec = win?.startSec ?? 0;
-    const endSec = win?.endSec ?? totalSeconds;
-
-    const dragWindowPoints = React.useMemo(() => {
-        if (!isDragging) return [];
-        const src = fixesLite && fixesLite.length >= 2 ? fixesLite : fixesFull;
-        return sliceFixesByWindow(src, startSec, endSec);
-    }, [isDragging, fixesLite, fixesFull, startSec, endSec]);
-
-    const { startIdx, endIdx } = React.useMemo(() => {
-        if (fixesFull.length < 2) return { startIdx: 0, endIdx: 0 };
-        const s = clamp(lowerBoundTSec(fixesFull, startSec), 0, fixesFull.length - 2);
-        const e = clamp(upperBoundTSec(fixesFull, endSec), s + 1, fixesFull.length - 1);
-        return { startIdx: s, endIdx: e };
-    }, [fixesFull, startSec, endSec]);
-
-    const colorChunks = React.useMemo(() => {
-        if (!hasTrack) return [];
-        if (isDragging) return [];
-        return buildChunksFromFixesWindow(fixesFull, startIdx, endIdx);
-    }, [hasTrack, isDragging, fixesFull, startIdx, endIdx]);
-
-    const center: LatLngTuple = fullPoints.length ? fullPoints[0] : [48.1372, 11.5756];
-    const bounds = React.useMemo(() => computeBounds(fullPoints), [fullPoints]);
-
-    const { line, outlineExtra, outlineOpacity } = React.useMemo(() => weightsForZoom(zoom), [zoom]);
-    const dragStyle = React.useMemo(() => dragStyleForZoomTopoGlow(zoom), [zoom]);
-
-    const outlineWeight = line + outlineExtra;
-    const OUTLINE = "rgba(0, 0, 0, 0.51)";
-
-    const tile = TILE[baseMap];
-
-    const startPct = pct(startSec, totalSeconds);
-    const endPct = pct(endSec, totalSeconds);
-
-    return (
-        <Box style={{ display: "flex", flexDirection: "column", height: "100%" }}>
-            <Group justify="space-between" mb="xs">
-                <Text fw={600}>Flight window</Text>
-                <Text c="dimmed">
-                    {startPct}% ({formatTime(startSec)}) → {endPct}% ({formatTime(endSec)}) / {formatTime(totalSeconds)}
-                </Text>
-            </Group>
-
-            <RangeSlider
-                value={[startSec, endSec]}
-                onChange={(v) => {
-                    const a = Math.min(v[0], v[1]);
-                    const b = Math.max(v[0], v[1]);
-
-                    setDragging(true);
-
-                    setWindowThrottled({
-                        startSec: a,
-                        endSec: b,
-                        totalSec: totalSeconds,
-                    });
-                }}
-                onChangeEnd={(v) => {
-                    const a = Math.min(v[0], v[1]);
-                    const b = Math.max(v[0], v[1]);
-
-                    setWindow({
-                        startSec: a,
-                        endSec: b,
-                        totalSec: totalSeconds,
-                    });
-
-                    setDragging(false);
-                }}
-                min={0}
-                max={totalSeconds}
-                step={1}
-                minRange={1}
-                mb="sm"
-                label={(v) => `${pct(v, totalSeconds)}%`}
-            />
-
-            <Box style={{ flex: 1, minHeight: 0 }}>
-                <MapContainer center={center} zoom={initialZoom} style={{ height: "100%", width: "100%" }} preferCanvas>
-                    <TileLayer key={tile.key} url={tile.url} attribution={tile.attribution} />
-
-                    {/* Base track */}
-                    <ActiveTrackLayer
-                        paneName="trackBase"
-                        points={baseFullPoints}
-                        weight={Math.max(2.2, line * 0.9)}
-                        watchKey={watchKey}
-                        color="rgba(120,120,130,0.55)"
-                        opacity={1}
-                    />
-
-                    {/* ✅ Thermal circles: allow low quality + few points so single turns render */}
-                    {showThermalsOnMap && (
-                        <>
-                            <ThermalCirclesLayer
-                                fixesFull={fixesFull}
-                                thermals={thermals}
-                                minQuality={0.05} // was 0.20
-                                minPts={6} // was 25
-                                simplifyEveryN={1} // was 2 (don’t kill small circles)
-                            />
-                        </>
-                    )}
+        // Adapter: TimeWindow -> WindRange (avoid type coupling)
+        const windRange = React.useMemo(() => {
+            if (!win) return null;
+            return { startSec: win.startSec, endSec: win.endSec };
+        }, [win]);
 
 
-                    {/* While dragging: show lite window overlay */}
-                    {isDragging && (
-                        <>
-                            <ActiveTrackLayer
-                                paneName="trackDrag"
-                                points={dragWindowPoints}
-                                watchKey={`${String(watchKey ?? "flight")}-drag-glow`}
-                                {...dragStyle.glow}
-                            />
-                            <ActiveTrackLayer
-                                paneName="trackDrag"
-                                points={dragWindowPoints}
-                                watchKey={`${String(watchKey ?? "flight")}-drag-outline`}
-                                {...dragStyle.outline}
-                            />
-                            <ActiveTrackLayer
-                                paneName="trackDrag"
-                                points={dragWindowPoints}
-                                watchKey={`${String(watchKey ?? "flight")}-drag-core`}
-                                {...dragStyle.core}
-                            />
-                        </>
-                    )}
 
-                    {/* ✅ Hover marker ALWAYS top */}
-                    <HoverMarker fixes={fixesFull} followEnabled={followEnabled} />
+        const windowBounds = React.useMemo(() => {
+            if (!win) return null;
+            const src = fixesLite && fixesLite.length >= 2 ? fixesLite : fixesFull;
+            const pts = sliceFixesByWindow(src, win.startSec, win.endSec);
+            return pts.length >= 2 ? computeBounds(pts) : null;
+        }, [win, fixesLite, fixesFull]);
 
-                    <WindLayer
-                        fixes={windFixes}
-                        range={windRange}
-                        windowEstimate={wind.window}
-                        opposite180Estimate={wind.opposite180}
-                        arrowScaleSec={500}
-                        minQuality={0.15}
-                    />
+        const [zoom, setZoom] = React.useState<number>(initialZoom);
+        React.useEffect(() => setZoom(initialZoom), [initialZoom]);
 
-                    {/* Colored chunks only when NOT dragging */}
-                    {colorChunks.map((ch, i) => (
-                        <Polyline
-                            key={`o-${i}`}
-                            positions={ch.positions}
-                            pathOptions={{
-                                color: OUTLINE,
-                                weight: outlineWeight,
-                                opacity: outlineOpacity,
-                                lineCap: "round",
-                                lineJoin: "round",
-                            }}
+        const fullPoints = React.useMemo(() => {
+            const out = new Array<LatLngTuple>(fixesFull.length);
+            for (let i = 0; i < fixesFull.length; i++) out[i] = [fixesFull[i].lat, fixesFull[i].lon];
+            return out;
+        }, [fixesFull]);
+
+        const baseFullPoints = fullPoints;
+
+        const totalSeconds = fixesFull.length ? fixesFull[fixesFull.length - 1].tSec : 0;
+        const wind = useWindEstimate(windFixes, windRange ?? { startSec: 0, endSec: totalSeconds }, windConfig);
+
+        // window is Source-of-Truth (from store), fallback to full range
+        const startSec = win?.startSec ?? 0;
+        const endSec = win?.endSec ?? totalSeconds;
+
+        const dragWindowPoints = React.useMemo(() => {
+            if (!isDragging) return [];
+            const src = fixesLite && fixesLite.length >= 2 ? fixesLite : fixesFull;
+            return sliceFixesByWindow(src, startSec, endSec);
+        }, [isDragging, fixesLite, fixesFull, startSec, endSec]);
+
+        const { startIdx, endIdx } = React.useMemo(() => {
+            if (fixesFull.length < 2) return { startIdx: 0, endIdx: 0 };
+            const s = clamp(lowerBoundTSec(fixesFull, startSec), 0, fixesFull.length - 2);
+            const e = clamp(upperBoundTSec(fixesFull, endSec), s + 1, fixesFull.length - 1);
+            return { startIdx: s, endIdx: e };
+        }, [fixesFull, startSec, endSec]);
+
+        const colorChunks = React.useMemo(() => {
+            if (!hasTrack) return [];
+            if (isDragging) return [];
+            return buildChunksFromFixesWindow(fixesFull, startIdx, endIdx);
+        }, [hasTrack, isDragging, fixesFull, startIdx, endIdx]);
+
+        const center: LatLngTuple = fullPoints.length ? fullPoints[0] : [48.1372, 11.5756];
+        const bounds = React.useMemo(() => computeBounds(fullPoints), [fullPoints]);
+
+        const { line, outlineExtra, outlineOpacity } = React.useMemo(() => weightsForZoom(zoom), [zoom]);
+        const dragStyle = React.useMemo(() => dragStyleForZoomTopoGlow(zoom), [zoom]);
+
+        const outlineWeight = line + outlineExtra;
+        const OUTLINE = "rgba(0, 0, 0, 0.51)";
+
+        const tile = TILE[baseMap];
+
+        const startPct = pct(startSec, totalSeconds);
+        const endPct = pct(endSec, totalSeconds);
+
+        return (
+            <Box style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+                <Group justify="space-between" mb="xs">
+                    <Text fw={600}>Flight window</Text>
+                    <Text c="dimmed">
+                        {startPct}% ({formatTime(startSec)}) → {endPct}% ({formatTime(endSec)}) / {formatTime(totalSeconds)}
+                    </Text>
+                </Group>
+
+                <RangeSlider
+                    value={[startSec, endSec]}
+                    onChange={(v) => {
+                        const a = Math.min(v[0], v[1]);
+                        const b = Math.max(v[0], v[1]);
+
+                        setDragging(true);
+
+                        setWindowThrottled({
+                            startSec: a,
+                            endSec: b,
+                            totalSec: totalSeconds,
+                        });
+                    }}
+                    onChangeEnd={(v) => {
+                        const a = Math.min(v[0], v[1]);
+                        const b = Math.max(v[0], v[1]);
+
+                        setWindow({
+                            startSec: a,
+                            endSec: b,
+                            totalSec: totalSeconds,
+                        });
+
+                        setDragging(false);
+                    }}
+                    min={0}
+                    max={totalSeconds}
+                    step={1}
+                    minRange={1}
+                    mb="sm"
+                    label={(v) => `${pct(v, totalSeconds)}%`}
+                />
+
+                <Box style={{ flex: 1, minHeight: 0 }}>
+                    <MapContainer center={center} zoom={initialZoom} style={{ height: "100%", width: "100%" }} preferCanvas>
+                        <TileLayer key={tile.key} url={tile.url} attribution={tile.attribution} />
+
+                        {/* Base track */}
+                        <ActiveTrackLayer
+                            paneName="trackBase"
+                            points={baseFullPoints}
+                            weight={Math.max(2.2, line * 0.9)}
+                            watchKey={watchKey}
+                            color="rgba(120,120,130,0.55)"
+                            opacity={1}
                         />
-                    ))}
-                    {colorChunks.map((ch, i) => (
-                        <Polyline
-                            key={`c-${i}`}
-                            positions={ch.positions}
-                            pathOptions={{
-                                color: ch.color,
-                                weight: line,
-                                opacity: 0.98,
-                                lineCap: "round",
-                                lineJoin: "round",
-                            }}
+
+                        {/* ✅ Thermal circles: allow low quality + few points so single turns render */}
+                        {showThermalsOnMap && (
+                            <>
+                                <ThermalCirclesLayer
+                                    fixesFull={fixesFull}
+                                    thermals={thermals}
+                                    minQuality={0.05} // was 0.20
+                                    minPts={6} // was 25
+                                    simplifyEveryN={1} // was 2 (don’t kill small circles)
+                                />
+                            </>
+                        )}
+
+
+                        {/* While dragging: show lite window overlay */}
+                        {isDragging && (
+                            <>
+                                <ActiveTrackLayer
+                                    paneName="trackDrag"
+                                    points={dragWindowPoints}
+                                    watchKey={`${String(watchKey ?? "flight")}-drag-glow`}
+                                    {...dragStyle.glow}
+                                />
+                                <ActiveTrackLayer
+                                    paneName="trackDrag"
+                                    points={dragWindowPoints}
+                                    watchKey={`${String(watchKey ?? "flight")}-drag-outline`}
+                                    {...dragStyle.outline}
+                                />
+                                <ActiveTrackLayer
+                                    paneName="trackDrag"
+                                    points={dragWindowPoints}
+                                    watchKey={`${String(watchKey ?? "flight")}-drag-core`}
+                                    {...dragStyle.core}
+                                />
+                            </>
+                        )}
+
+                        {/* ✅ Hover marker ALWAYS top */}
+                        <HoverMarker fixes={fixesFull} followEnabled={followEnabled} />
+
+                        <WindLayer
+                            fixes={windFixes}
+                            range={windRange}
+                            windowEstimate={wind.window}
+                            opposite180Estimate={wind.opposite180}
+                            arrowScaleSec={500}
+                            minQuality={0.15}
                         />
-                    ))}
 
-                    <ZoomWatcher onZoom={setZoom} />
-                    <MapAutoResize watchKey={watchKey} />
+                        {/* Colored chunks only when NOT dragging */}
+                        {colorChunks.map((ch, i) => (
+                            <Polyline
+                                key={`o-${i}`}
+                                positions={ch.positions}
+                                pathOptions={{
+                                    color: OUTLINE,
+                                    weight: outlineWeight,
+                                    opacity: outlineOpacity,
+                                    lineCap: "round",
+                                    lineJoin: "round",
+                                }}
+                            />
+                        ))}
+                        {colorChunks.map((ch, i) => (
+                            <Polyline
+                                key={`c-${i}`}
+                                positions={ch.positions}
+                                pathOptions={{
+                                    color: ch.color,
+                                    weight: line,
+                                    opacity: 0.98,
+                                    lineCap: "round",
+                                    lineJoin: "round",
+                                }}
+                            />
+                        ))}
 
-                    <FitToWindowOnCommit
-                        bounds={windowBounds}
-                        enabled={!!win && !isDragging}
-                        commitKey={
-                            win
-                                ? `${Math.round(win.startSec)}-${Math.round(win.endSec)}-${String(watchKey ?? "")}`
-                                : `none-${String(watchKey ?? "")}`
-                        }
-                    />
-                    <FitToSelectionOrFull
-                        fullBounds={bounds}
-                        windowBounds={windowBounds}
-                        win={win}
-                        isDragging={isDragging}
-                        watchKey={watchKey}
-                    />
-                </MapContainer>
+                        <ZoomWatcher onZoom={setZoom} />
+                        <MapAutoResize watchKey={watchKey} />
+
+                        <FitToWindowOnCommit
+                            bounds={windowBounds}
+                            enabled={!!win && !isDragging}
+                            commitKey={
+                                win
+                                    ? `${Math.round(win.startSec)}-${Math.round(win.endSec)}-${String(watchKey ?? "")}`
+                                    : `none-${String(watchKey ?? "")}`
+                            }
+                        />
+                        <FitToSelectionOrFull
+                            fullBounds={bounds}
+                            windowBounds={windowBounds}
+                            win={win}
+                            isDragging={isDragging}
+                            watchKey={watchKey}
+                        />
+                    </MapContainer>
+                </Box>
             </Box>
-        </Box>
-    );
-}
+        );
+    },
+    (prev, next) => {
+        return (
+            prev.watchKey === next.watchKey &&
+            prev.fixesFull === next.fixesFull &&
+            prev.fixesLite === next.fixesLite &&
+            prev.thermals === next.thermals
+        );
+    }
+);
