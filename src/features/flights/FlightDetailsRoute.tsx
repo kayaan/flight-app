@@ -15,6 +15,7 @@ import {
   ActionIcon,
   Divider,
   Drawer,
+  Chip,
 } from "@mantine/core";
 import { IconAlertCircle, IconSettings } from "@tabler/icons-react";
 import EChartsReact from "echarts-for-react";
@@ -75,7 +76,6 @@ function buildActiveRangeMarkLine(range: { startSec: number; endSec: number } | 
 
 
 function buildClimbLinesSeries(enabled: boolean, climbMarkLineData: any[]) {
-  if (!enabled || !climbMarkLineData?.length) return [];
   return [
     {
       id: "__climbLines",
@@ -84,14 +84,18 @@ function buildClimbLinesSeries(enabled: boolean, climbMarkLineData: any[]) {
       data: [],
       silent: true,
       z: 9,
+      // ✅ togglen nur über data
       markLine: {
         symbol: "none",
         label: { show: false },
-        data: climbMarkLineData,
+        data: enabled && climbMarkLineData?.length ? climbMarkLineData : [],
       },
     },
   ];
 }
+
+
+
 const axisPointerLabelFormatter = (params: AxisPointerLabelParams) => {
   const v = params.value as any;
 
@@ -756,6 +760,18 @@ export function FlightDetailsRoute() {
   const hasClimbs = climbs.length > 0;
   const climbNavActive = activeClimbIndex != null && hasClimbs;
 
+  const [settingsOpen, setSettingsOpen] = React.useState(false);
+  const [mapFocusKey, setMapFocusKey] = React.useState(0);
+  const [pulseActive, setPulseActive] = React.useState(false);
+
+  // kleine UX-Pulse helper
+  const pulse = React.useCallback(() => {
+    setPulseActive(true);
+    window.setTimeout(() => setPulseActive(false), 260);
+  }, []);
+
+
+
   const clearActiveClimb = React.useCallback(() => {
     setActiveClimbIndex(null);
   }, []);
@@ -952,6 +968,22 @@ export function FlightDetailsRoute() {
     const i = clamp(activeClimbIndex, 0, climbs.length - 1);
     return climbs[i] ?? null;
   }, [activeClimbIndex, climbs]);
+
+  const thermalCount = thermals?.length ?? 0;
+
+  const activeClimbGainM = React.useMemo(() => {
+    if (!activeClimb) return null;
+    return Number.isFinite(activeClimb.gainM) ? activeClimb.gainM : null;
+  }, [activeClimb]);
+
+  const activeClimbDurSec = React.useMemo(() => {
+    if (!activeClimb || !computed?.fixesFull?.length) return null;
+    const f = computed.fixesFull;
+    const s = f[activeClimb.startIdx]?.tSec;
+    const e = f[activeClimb.endIdx]?.tSec;
+    if (!Number.isFinite(s) || !Number.isFinite(e)) return null;
+    return Math.max(0, Math.abs((e as number) - (s as number)));
+  }, [activeClimb, computed?.fixesFull]);
 
   const activeClimbOverlay = React.useMemo(() => {
     const f = computed?.fixesFull ?? null;
@@ -1471,6 +1503,8 @@ export function FlightDetailsRoute() {
     }
   }, [chartData?.maxT, winTotalSec, winStartSec, winEndSec, showAlt, showVario, showSpeed]);
 
+
+
   React.useEffect(() => {
     if (!zoomSyncEnabled) return;
     if (!win) return;
@@ -1518,6 +1552,42 @@ export function FlightDetailsRoute() {
     if (showSpeed && speedInstRef.current) out.push({ kind: "speed", inst: speedInstRef.current });
     return out;
   }, [showAlt, showVario, showSpeed]);
+
+
+  const focusActiveClimb = React.useCallback(() => {
+    if (!activeClimb || !computed?.fixesFull?.length) return;
+
+    const f = computed.fixesFull;
+    const sRaw = f[activeClimb.startIdx]?.tSec;
+    const eRaw = f[activeClimb.endIdx]?.tSec;
+    if (!Number.isFinite(sRaw) || !Number.isFinite(eRaw)) return;
+
+    const cs = Math.min(sRaw as number, eRaw as number);
+    const ce = Math.max(sRaw as number, eRaw as number);
+
+    const PAD = 0.75;
+    const maxT = chartData?.maxT ?? winTotalSec ?? ce;
+
+    const startValue = clamp(cs - PAD, 0, maxT);
+    const endValue = clamp(ce + PAD, 0, maxT);
+
+    // ✅ Charts zoomen
+    applyRangeToCharts(getVisibleCharts(), startValue, endValue);
+
+    // ✅ Map „anstoßen“ (watchKey ändert sich -> Map kann fitten, wenn du das so gebaut hast)
+    setMapFocusKey((x) => x + 1);
+
+    // ✅ kleine Pulse-UX
+    pulse();
+
+  }, [
+    activeClimb,
+    computed?.fixesFull,
+    chartData?.maxT,
+    winTotalSec,
+    getVisibleCharts,
+    pulse,
+  ]);
 
 
   function getVisibleXRange(inst: any, fallbackMaxT: number): { min: number; max: number } {
@@ -1983,7 +2053,58 @@ export function FlightDetailsRoute() {
   const mapFixesLite = computedWithLite?.fixesLite ?? EMPTY_FIXES;
   const mapThermals = thermals ?? EMPTY_THERMALS;
 
-  const [settingsOpen, setSettingsOpen] = React.useState(false);
+  const selectedCharts = React.useMemo(() => {
+    const out: string[] = [];
+    if (showAlt) out.push("alt");
+    if (showVario) out.push("vario");
+    if (showSpeed) out.push("speed");
+    return out;
+  }, [showAlt, showVario, showSpeed]);
+
+  const setSelectedCharts = React.useCallback(
+    (vals: string[]) => {
+      const nextAlt = vals.includes("alt");
+      const nextVario = vals.includes("vario");
+      const nextSpeed = vals.includes("speed");
+
+      // Alt
+      if (showAlt !== nextAlt) {
+        setShowAlt(nextAlt);
+        if (!nextAlt) {
+          altInstRef.current = null;
+          setChartReady((r) => ({ ...r, alt: false }));
+          setChartsReadyTick((x) => x + 1);
+        }
+      }
+
+      // Vario
+      if (showVario !== nextVario) {
+        setShowVario(nextVario);
+        if (!nextVario) {
+          varioInstRef.current = null;
+          setChartReady((r) => ({ ...r, vario: false }));
+          setChartsReadyTick((x) => x + 1);
+        }
+      }
+
+      // Speed
+      if (showSpeed !== nextSpeed) {
+        setShowSpeed(nextSpeed);
+        if (!nextSpeed) {
+          speedInstRef.current = null;
+          setChartReady((r) => ({ ...r, speed: false }));
+          setChartsReadyTick((x) => x + 1);
+        }
+      }
+    },
+    [
+      showAlt, showVario, showSpeed,
+      setShowAlt, setShowVario, setShowSpeed,
+      setChartReady, setChartsReadyTick,
+    ]
+  );
+
+
 
   return (
     <Box p="md">
@@ -2063,6 +2184,65 @@ export function FlightDetailsRoute() {
           zIndex={3000}
           overlayProps={{ opacity: 0.35, blur: 2 }}
         >
+          <Paper withBorder p="sm" radius="md">
+            <Group justify="space-between" align="center" mb={6}>
+              <Text fw={600} size="sm">Flight Summary</Text>
+              <Text size="xs" c="dimmed">{id}</Text>
+            </Group>
+
+            <SimpleGrid cols={2} spacing="xs" verticalSpacing="xs">
+              <Box>
+                <Text size="xs" c="dimmed">Climbs</Text>
+                <Text fw={600}>{climbs.length}</Text>
+              </Box>
+
+              <Box>
+                <Text size="xs" c="dimmed">Thermals</Text>
+                <Text fw={600}>{thermalCount}</Text>
+              </Box>
+
+              <Box>
+                <Text size="xs" c="dimmed">Active climb</Text>
+                <Text fw={600}>
+                  {activeClimb && activeClimbGainM != null && activeClimbDurSec != null
+                    ? `${fmtSigned(activeClimbGainM, 0)} m · ${fmtTime(activeClimbDurSec)}`
+                    : "—"}
+                </Text>
+              </Box>
+
+              <Box>
+                <Text size="xs" c="dimmed">Window</Text>
+                <Text fw={600}>
+                  {fmtTime(Math.min(winStartSec, winEndSec))} → {fmtTime(Math.max(winStartSec, winEndSec))}
+                </Text>
+              </Box>
+            </SimpleGrid>
+
+            <Divider my="sm" />
+
+            <Group justify="space-between">
+              <Button
+                size="xs"
+                variant="light"
+                onClick={focusActiveClimb}
+                disabled={!activeClimb || !computed?.fixesFull?.length}
+              >
+                Focus active climb
+              </Button>
+
+              <Button
+                size="xs"
+                variant="light"
+                onClick={() => {
+                  setSettingsOpen(false);
+                  pulse();
+                }}
+              >
+                Close
+              </Button>
+            </Group>
+          </Paper>
+
           <Stack gap="md">
             {/* Charts */}
             <Box>
@@ -2070,55 +2250,13 @@ export function FlightDetailsRoute() {
                 Charts
               </Text>
 
-              <Group gap="xs">
-                <Button
-                  size="xs"
-                  variant={showAlt ? "filled" : "light"}
-                  onClick={() => {
-                    const next = !showAlt;
-                    setShowAlt(next);
-                    if (!next) {
-                      altInstRef.current = null;
-                      setChartReady((r) => ({ ...r, alt: false }));
-                      setChartsReadyTick((x) => x + 1);
-                    }
-                  }}
-                >
-                  Alt
-                </Button>
-
-                <Button
-                  size="xs"
-                  variant={showVario ? "filled" : "light"}
-                  onClick={() => {
-                    const next = !showVario;
-                    setShowVario(next);
-                    if (!next) {
-                      varioInstRef.current = null;
-                      setChartReady((r) => ({ ...r, vario: false }));
-                      setChartsReadyTick((x) => x + 1);
-                    }
-                  }}
-                >
-                  Vario
-                </Button>
-
-                <Button
-                  size="xs"
-                  variant={showSpeed ? "filled" : "light"}
-                  onClick={() => {
-                    const next = !showSpeed;
-                    setShowSpeed(next);
-                    if (!next) {
-                      speedInstRef.current = null;
-                      setChartReady((r) => ({ ...r, speed: false }));
-                      setChartsReadyTick((x) => x + 1);
-                    }
-                  }}
-                >
-                  Speed
-                </Button>
-              </Group>
+              <Chip.Group multiple value={selectedCharts} onChange={setSelectedCharts}>
+                <Group gap="xs">
+                  <Chip value="alt" radius="sm" variant="filled">Alt</Chip>
+                  <Chip value="vario" radius="sm" variant="filled">Vario</Chip>
+                  <Chip value="speed" radius="sm" variant="filled">Speed</Chip>
+                </Group>
+              </Chip.Group>
 
               <Divider my="sm" />
 
@@ -2326,13 +2464,24 @@ export function FlightDetailsRoute() {
               <Text size="sm" fw={600} mb={4}>
                 Map
               </Text>
-              <Box style={{ flex: 1, minHeight: 0 }}>
+              <Box
+                style={{
+                  flex: 1,
+                  minHeight: 0,
+                  borderRadius: 12,
+                  transition: "box-shadow 180ms ease, transform 180ms ease",
+                  boxShadow: pulseActive ? "0 0 0 2px rgba(255, 212, 0, 0.65)" : undefined,
+                  transform: pulseActive ? "scale(1.002)" : undefined,
+                  overflow: "hidden",
+                }}
+              >
                 <FlightMap
                   fixesFull={mapFixesFull}
                   fixesLite={mapFixesLite}
                   thermals={mapThermals}
                   activeClimb={activeClimb ? { startIdx: activeClimb.startIdx, endIdx: activeClimb.endIdx } : null}
                   watchKey={`${id}-${baseMap}`}
+                  focusKey={mapFocusKey}
                 />
               </Box>
             </Box>

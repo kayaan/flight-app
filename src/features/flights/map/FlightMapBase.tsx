@@ -100,13 +100,16 @@ function ActiveClimbLayer({
     fixesFull,
     activeClimb,
     watchKey,
+    focusKey, // ✅ neu
 }: {
     fixesFull: FixPoint[];
     activeClimb: { startIdx: number; endIdx: number } | null;
     watchKey?: unknown;
+    focusKey?: number; // ✅ neu
 }) {
     const map = useMap();
     const lineRef = React.useRef<L.Polyline | null>(null);
+    const lastFocusRef = React.useRef<number>(-1);
 
     // create once
     React.useEffect(() => {
@@ -135,6 +138,7 @@ function ActiveClimbLayer({
 
     React.useEffect(() => {
         const line = lineRef.current;
+
         if (!line) return;
 
         // hide if no climb
@@ -162,31 +166,44 @@ function ActiveClimbLayer({
         line.setLatLngs(pts);
         line.redraw?.();
 
-        // --- visibility / map adjust (NO zoom-in, only zoom-out + center) ---
+        // --- visibility / map adjust ---
         try {
             const segBounds = L.latLngBounds(pts as any);
             if (!segBounds.isValid()) return;
 
+            const forced = (focusKey ?? 0) !== lastFocusRef.current;
+            if (forced) lastFocusRef.current = focusKey ?? 0;
+
             const curBounds = map.getBounds();
-            // shrink current bounds: if segment is near edge, we still treat as "not visible"
             const strict = curBounds.pad(-0.08);
-
             const alreadyVisible = strict.isValid() && strict.contains(segBounds);
-            if (alreadyVisible) return;
 
-            const center = segBounds.getCenter();
+            // ✅ normal: nur wenn nicht sichtbar
+            // ✅ forced (Button): immer (auch wenn sichtbar)
+            if (alreadyVisible && !forced) return;
 
-            // needed zoom to fit; we must NOT zoom in, only allow zoom out
-            const neededZoom = map.getBoundsZoom(segBounds, true);
             const curZoom = map.getZoom();
-            const targetZoom = Math.min(curZoom, neededZoom); // ✅ only zoom out (or keep)
 
-            // If not visible, ensure it becomes visible and centered
-            map.setView(center, targetZoom, { animate: true });
+            // fit zoom, aber NICHT reinzoomen (nur raus / gleich)
+            const neededZoom = map.getBoundsZoom(segBounds, true);
+            const targetZoom = Math.min(curZoom, neededZoom);
+
+            // beim forced Fokus lieber fitBounds (mit maxZoom = curZoom), fühlt sich besser an
+            if (forced) {
+                map.fitBounds(segBounds, {
+                    padding: [FOLLOW_FIT_PADDING, FOLLOW_FIT_PADDING],
+                    maxZoom: curZoom,       // ✅ no zoom-in
+                    animate: true,
+                });
+            } else {
+                // dein bisheriges Verhalten (center + ggf zoom-out)
+                map.setView(segBounds.getCenter(), targetZoom, { animate: true });
+            }
         } catch {
             // ignore
         }
-    }, [map, fixesFull, activeClimb, watchKey]);
+
+    }, [map, fixesFull, activeClimb, watchKey, focusKey]);
 
     return null;
 }
@@ -912,6 +929,7 @@ function buildChunkRangesFromSegColors(segColors: string[], startIdx: number, en
 
 type FlightMapProps = {
     watchKey?: unknown;
+    focusKey?: number; // ✅ neu
     fixesFull: FixPoint[];
     fixesLite: FixPoint[];
     thermals: ThermalCircle[];
@@ -921,12 +939,12 @@ type FlightMapProps = {
 export const FlightMap = React.memo(
     function FlightMap({
         watchKey,
+        focusKey = 0, // ✅ neu
         fixesFull,
         fixesLite,
         thermals,
         activeClimb = null,
     }: FlightMapProps) {
-
         const baseMap = useFlightDetailsUiStore((s) => s.baseMap);
         const followEnabled = useFlightDetailsUiStore((s) => s.followEnabled);
         const showThermalsOnMap = useFlightDetailsUiStore((s) => s.showThermalsOnMap);
@@ -1160,6 +1178,7 @@ export const FlightMap = React.memo(
                             fixesFull={fixesFull}
                             activeClimb={activeClimb}
                             watchKey={watchKey}
+                            focusKey={focusKey}
                         />
 
                         <ZoomWatcher onZoom={setZoom} />
@@ -1189,6 +1208,7 @@ export const FlightMap = React.memo(
 
         return (
             prev.watchKey === next.watchKey &&
+            prev.focusKey === next.focusKey && // ✅ neu
             prev.fixesFull === next.fixesFull &&
             prev.fixesLite === next.fixesLite &&
             prev.thermals === next.thermals &&
