@@ -352,14 +352,19 @@ function ActiveTrackLayer({
     return null;
 }
 
-function ColorChunksLayer({
-    chunks,
+type ChunkRange = { color: string; fromIdx: number; toIdx: number };
+// fromIdx..toIdx sind POINT-indizes (inkl.), toIdx >= fromIdx+1
+
+function ColorChunkRangesLayer({
+    latlngs,
+    ranges,
     outlineWeight,
     outlineOpacity,
     line,
     paneName = "trackColor",
 }: {
-    chunks: Array<{ color: string; positions: LatLngTuple[] }>;
+    latlngs: LatLngTuple[];
+    ranges: ChunkRange[];
     outlineWeight: number;
     outlineOpacity: number;
     line: number;
@@ -370,6 +375,9 @@ function ColorChunksLayer({
     const groupRef = React.useRef<L.LayerGroup | null>(null);
     const outlineRef = React.useRef<L.Polyline[]>([]);
     const coreRef = React.useRef<L.Polyline[]>([]);
+
+    // ✅ pooled arrays for setLatLngs (avoid allocating new arrays every update)
+    const ptsPoolRef = React.useRef<LatLngTuple[][]>([]);
 
     React.useEffect(() => {
         ensurePane(map, paneName, 700);
@@ -383,6 +391,7 @@ function ColorChunksLayer({
             groupRef.current = null;
             outlineRef.current = [];
             coreRef.current = [];
+            ptsPoolRef.current = [];
         };
     }, [map, paneName]);
 
@@ -392,7 +401,6 @@ function ColorChunksLayer({
 
         const OUTLINE = "rgba(0, 0, 0, 0.51)";
 
-        // --- helper: ensure polyline exists at index ---
         const ensurePoly = (arr: L.Polyline[], i: number, color: string, weight: number, opacity: number) => {
             let p = arr[i];
             if (!p) {
@@ -413,32 +421,48 @@ function ColorChunksLayer({
             return p;
         };
 
+        const ensurePts = (i: number) => {
+            let pts = ptsPoolRef.current[i];
+            if (!pts) {
+                pts = [];
+                ptsPoolRef.current[i] = pts;
+            }
+            return pts;
+        };
+
         // --- update / create ---
-        for (let i = 0; i < chunks.length; i++) {
-            const ch = chunks[i];
+        for (let i = 0; i < ranges.length; i++) {
+            const r = ranges[i];
 
             const o = ensurePoly(outlineRef.current, i, OUTLINE, outlineWeight, outlineOpacity);
-            o.setLatLngs(ch.positions);
+            const c = ensurePoly(coreRef.current, i, r.color, line, 0.98);
 
-            const c = ensurePoly(coreRef.current, i, ch.color, line, 0.98);
-            c.setLatLngs(ch.positions);
+            const pts = ensurePts(i);
+            pts.length = 0;
+
+            // fill pooled array with references to precomputed tuples
+            const from = Math.max(0, Math.min(r.fromIdx, latlngs.length - 1));
+            const to = Math.max(0, Math.min(r.toIdx, latlngs.length - 1));
+
+            for (let k = from; k <= to; k++) pts.push(latlngs[k]);
+
+            o.setLatLngs(pts);
+            c.setLatLngs(pts);
         }
 
         // --- remove extras ---
-        for (let i = chunks.length; i < outlineRef.current.length; i++) {
-            outlineRef.current[i]?.remove();
-        }
-        outlineRef.current.length = chunks.length;
+        for (let i = ranges.length; i < outlineRef.current.length; i++) outlineRef.current[i]?.remove();
+        outlineRef.current.length = ranges.length;
 
-        for (let i = chunks.length; i < coreRef.current.length; i++) {
-            coreRef.current[i]?.remove();
-        }
-        coreRef.current.length = chunks.length;
-    }, [chunks, outlineWeight, outlineOpacity, line, paneName]);
+        for (let i = ranges.length; i < coreRef.current.length; i++) coreRef.current[i]?.remove();
+        coreRef.current.length = ranges.length;
+
+        // keep pool arrays; we can keep them to reuse later (optional)
+        // ptsPoolRef.current.length = Math.max(ptsPoolRef.current.length, ranges.length);
+    }, [latlngs, ranges, outlineWeight, outlineOpacity, line, paneName]);
 
     return null;
 }
-
 
 function HoverMarker({ fixes, followEnabled }: { fixes: FixPoint[]; followEnabled: boolean }) {
     const map = useMap();
@@ -774,13 +798,46 @@ function dragStyleForZoomTopoGlow(z: number) {
     };
 }
 
+
+function buildChunkRangesFromSegColors(segColors: string[], startIdx: number, endIdx: number): ChunkRange[] {
+    // segments are [0..n-2], points are [0..n-1]
+    // window points: startIdx..endIdx (inclusive)
+    // segments in window: startIdx..endIdx-1
+    if (!segColors.length) return [];
+    if (endIdx <= startIdx) return [];
+
+    const s = Math.max(0, Math.min(startIdx, segColors.length));       // segment start
+    const e = Math.max(0, Math.min(endIdx - 1, segColors.length - 1)); // segment end
+
+    if (e < s) return [];
+
+    const out: ChunkRange[] = [];
+    let runColor = segColors[s];
+    let runStartSeg = s;
+
+    for (let i = s + 1; i <= e; i++) {
+        const c = segColors[i];
+        if (c !== runColor) {
+            // segments runStartSeg..(i-1) => points runStartSeg..i
+            out.push({ color: runColor, fromIdx: runStartSeg, toIdx: i });
+            runColor = c;
+            runStartSeg = i;
+        }
+    }
+
+    // tail: runStartSeg..e => points runStartSeg..(e+1)
+    out.push({ color: runColor, fromIdx: runStartSeg, toIdx: e + 1 });
+
+    return out;
+}
+
+
 type FlightMapProps = {
     watchKey?: unknown;
     fixesFull: FixPoint[];
     fixesLite: FixPoint[];
     thermals: ThermalCircle[];
 };
-
 
 export const FlightMap = React.memo(
     function FlightMap({
@@ -808,6 +865,31 @@ export const FlightMap = React.memo(
 
         // Adapter: FixPoint -> WindFix (avoid type coupling)
         const windFixes = React.useMemo(() => fixesFull.map(({ tSec, lat, lon }) => ({ tSec, lat, lon })), [fixesFull]);
+
+
+        const pre = React.useMemo(() => {
+            const n = fixesFull.length;
+            if (n < 2) return { latlngs: [] as LatLngTuple[], segColors: [] as string[] };
+
+            const latlngs = new Array<LatLngTuple>(n);
+            for (let i = 0; i < n; i++) latlngs[i] = [fixesFull[i].lat, fixesFull[i].lon];
+
+            // color per segment i -> i+1
+            const segColors = new Array<string>(n - 1);
+            let lastV = 0;
+
+            for (let i = 0; i < n - 1; i++) {
+                const a = fixesFull[i];
+                const b = fixesFull[i + 1];
+
+                const dt = b.tSec - a.tSec;
+                if (dt > 0) lastV = (b.altitudeM - a.altitudeM) / dt;
+
+                segColors[i] = colorForVario(lastV);
+            }
+
+            return { latlngs, segColors };
+        }, [fixesFull]);
 
         // Adapter: TimeWindow -> WindRange (avoid type coupling)
         const windRange = React.useMemo(() => {
@@ -855,11 +937,11 @@ export const FlightMap = React.memo(
             return { startIdx: s, endIdx: e };
         }, [fixesFull, startSec, endSec]);
 
-        const colorChunks = React.useMemo(() => {
+        const chunkRanges = React.useMemo(() => {
             if (!hasTrack) return [];
             if (isDragging) return [];
-            return buildChunksFromFixesWindow(fixesFull, startIdx, endIdx);
-        }, [hasTrack, isDragging, fixesFull, startIdx, endIdx]);
+            return buildChunkRangesFromSegColors(pre.segColors, startIdx, endIdx);
+        }, [hasTrack, isDragging, pre.segColors, startIdx, endIdx]);
 
         const center: LatLngTuple = fullPoints.length ? fullPoints[0] : [48.1372, 11.5756];
         const bounds = React.useMemo(() => computeBounds(fullPoints), [fullPoints]);
@@ -981,17 +1063,16 @@ export const FlightMap = React.memo(
                             arrowScaleSec={500}
                             minQuality={0.15}
                         />
-
-                        {!isDragging && colorChunks.length > 0 && (
-                            <ColorChunksLayer
-                                chunks={colorChunks}
+                        {!isDragging && chunkRanges.length > 0 && (
+                            <ColorChunkRangesLayer
+                                latlngs={pre.latlngs}
+                                ranges={chunkRanges}
                                 outlineWeight={outlineWeight}
                                 outlineOpacity={outlineOpacity}
                                 line={line}
                                 paneName="trackColor"
                             />
                         )}
-
 
                         <ZoomWatcher onZoom={setZoom} />
                         <MapAutoResize watchKey={watchKey} />
