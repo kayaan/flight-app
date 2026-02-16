@@ -95,35 +95,13 @@ function MapAutoResize({ watchKey }: { watchKey?: unknown }) {
     return null;
 }
 
-function FitToWindowOnCommit({
-    bounds,
-    commitKey,
-    enabled,
-}: {
-    bounds: LatLngBoundsExpression | null;
-    commitKey: string;
-    enabled: boolean;
-}) {
-    const map = useMap();
-    const lastKeyRef = React.useRef<string>("");
 
-    const autoFitSelection = useTimeWindowStore((s) => s.autoFitSelection);
+// --- delete these two components entirely ---
+// function FitToWindowOnCommit(...) { ... }
+// function FitToSelectionOrFull(...) { ... }
 
-    React.useEffect(() => {
-        if (!enabled) return;
-        if (!autoFitSelection) return;
-        if (!bounds) return;
-
-        if (lastKeyRef.current === commitKey) return;
-        lastKeyRef.current = commitKey;
-
-        map.fitBounds(bounds, { padding: [18, 18] });
-    }, [map, bounds, commitKey, enabled, autoFitSelection]);
-
-    return null;
-}
-
-function FitToSelectionOrFull({
+// ✅ single source of truth: ONE fitBounds controller
+function FitBoundsController({
     fullBounds,
     windowBounds,
     win,
@@ -137,31 +115,73 @@ function FitToSelectionOrFull({
     watchKey?: unknown;
 }) {
     const map = useMap();
-    const lastKeyRef = React.useRef<string>("");
 
     const autoFitSelection = useTimeWindowStore((s) => s.autoFitSelection);
+
+    // prevent double fit for the same logical trigger
+    const lastKeyRef = React.useRef<string>("");
+
+    // optional: tiny debounce so multiple state updates in one tick don't cause extra work
+    const tRef = React.useRef<number | null>(null);
 
     React.useEffect(() => {
         if (isDragging) return;
 
-        // nur Selection-Fit blocken, Full-Fit (Reset) erlauben
-        if (win && !autoFitSelection) return;
-
+        // Decide what we want to fit to:
+        // - If win exists: only fit if autoFitSelection is enabled
+        // - Else: fit to full bounds (e.g. reset or initial)
         const targetBounds = win ? windowBounds : fullBounds;
         if (!targetBounds) return;
 
+        if (win && !autoFitSelection) {
+            // user has selection, but auto-fit disabled => don't move map
+            return;
+        }
+
+        // Build a stable "reason key" that changes ONLY when we truly want to refit.
+        // - For window: depends on committed window values
+        // - For full: depends on watchKey (flight/map base change), not on UI toggles
         const key = win
-            ? `win:${Math.round(win.startSec)}-${Math.round(win.endSec)}:${String(watchKey ?? "")}`
+            ? `win:${Math.round(win.startSec)}-${Math.round(win.endSec)}`
             : `full:${String(watchKey ?? "")}`;
 
         if (lastKeyRef.current === key) return;
         lastKeyRef.current = key;
 
-        map.fitBounds(targetBounds, { padding: [18, 18] });
+        // Debounce (optional but helps perceived snappiness when multiple setStates happen)
+        if (tRef.current != null) window.clearTimeout(tRef.current);
+
+        tRef.current = window.setTimeout(() => {
+            tRef.current = null;
+
+            // ✅ Skip if the map already "basically" contains the target.
+            // This avoids pointless fitBounds calls when bounds didn't materially change.
+            try {
+                const current = map.getBounds();
+                const target = L.latLngBounds(targetBounds as any);
+
+                // inflate a tiny bit so we don't refit for minuscule differences
+                const inflated = current.pad(-0.02); // negative shrinks (stricter). use +0.02 to loosen.
+                const alreadyOk = inflated.isValid() && target.isValid() && inflated.contains(target);
+
+                if (alreadyOk) return;
+            } catch {
+                // ignore and fit anyway
+            }
+
+            // ✅ For auto/system fits: keep it non-animated (much cheaper and feels snappier)
+            map.fitBounds(targetBounds, { padding: [18, 18], animate: false });
+        }, 80);
+
+        return () => {
+            if (tRef.current != null) window.clearTimeout(tRef.current);
+            tRef.current = null;
+        };
     }, [map, fullBounds, windowBounds, win, isDragging, watchKey, autoFitSelection]);
 
     return null;
 }
+
 
 function ZoomWatcher({ onZoom }: { onZoom: (z: number) => void }) {
     const lastRef = React.useRef<number | null>(null);
@@ -1077,22 +1097,14 @@ export const FlightMap = React.memo(
                         <ZoomWatcher onZoom={setZoom} />
                         <MapAutoResize watchKey={watchKey} />
 
-                        <FitToWindowOnCommit
-                            bounds={windowBounds}
-                            enabled={!!win && !isDragging}
-                            commitKey={
-                                win
-                                    ? `${Math.round(win.startSec)}-${Math.round(win.endSec)}-${String(watchKey ?? "")}`
-                                    : `none-${String(watchKey ?? "")}`
-                            }
-                        />
-                        <FitToSelectionOrFull
+                        <FitBoundsController
                             fullBounds={bounds}
                             windowBounds={windowBounds}
                             win={win}
                             isDragging={isDragging}
                             watchKey={watchKey}
                         />
+
                     </MapContainer>
                 </Box>
             </Box>
