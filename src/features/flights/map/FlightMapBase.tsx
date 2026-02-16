@@ -11,7 +11,7 @@ import { Box, Group, Text, RangeSlider } from "@mantine/core";
 import { useFlightHoverStore } from "../store/flightHover.store";
 import { useTimeWindowStore, type TimeWindow } from "../store/timeWindow.store";
 
-import { MapContainer, TileLayer, Polyline, useMap, useMapEvents } from "react-leaflet";
+import { MapContainer, TileLayer, useMap, useMapEvents } from "react-leaflet";
 import { useWindConfigStore } from "../analysis/wind/wind.config.store";
 import { useWindEstimate } from "../analysis/wind/useWindEstimate";
 import { WindLayer } from "./layers/windLayer";
@@ -96,23 +96,116 @@ function MapAutoResize({ watchKey }: { watchKey?: unknown }) {
 }
 
 
-// --- delete these two components entirely ---
-// function FitToWindowOnCommit(...) { ... }
-// function FitToSelectionOrFull(...) { ... }
+function ActiveClimbLayer({
+    fixesFull,
+    activeClimb,
+    watchKey,
+}: {
+    fixesFull: FixPoint[];
+    activeClimb: { startIdx: number; endIdx: number } | null;
+    watchKey?: unknown;
+}) {
+    const map = useMap();
+    const lineRef = React.useRef<L.Polyline | null>(null);
 
-// ✅ single source of truth: ONE fitBounds controller
+    // create once
+    React.useEffect(() => {
+        ensurePane(map, "activeClimb", 1100); // above trackColor/drag, below hoverMarker(1200)
+
+        if (lineRef.current) return;
+
+        const line = L.polyline([], {
+            pane: "activeClimb",
+            color: "#ffd400", // yellow
+            weight: 6,
+            opacity: 0.98,
+            lineCap: "round",
+            lineJoin: "round",
+            interactive: false,
+        });
+
+        line.addTo(map);
+        lineRef.current = line;
+
+        return () => {
+            line.remove();
+            lineRef.current = null;
+        };
+    }, [map]);
+
+    React.useEffect(() => {
+        const line = lineRef.current;
+        if (!line) return;
+
+        // hide if no climb
+        if (!activeClimb || fixesFull.length < 2) {
+            line.setLatLngs([]);
+            return;
+        }
+
+        const s = clamp(activeClimb.startIdx, 0, fixesFull.length - 2);
+        const e = clamp(activeClimb.endIdx, s + 1, fixesFull.length - 1);
+
+        const pts: LatLngTuple[] = [];
+        for (let i = s; i <= e; i++) {
+            const f = fixesFull[i];
+            if (!Number.isFinite(f.lat) || !Number.isFinite(f.lon)) continue;
+            if (f.lat === 0 && f.lon === 0) continue;
+            pts.push([f.lat, f.lon]);
+        }
+
+        if (pts.length < 2) {
+            line.setLatLngs([]);
+            return;
+        }
+
+        line.setLatLngs(pts);
+        line.redraw?.();
+
+        // --- visibility / map adjust (NO zoom-in, only zoom-out + center) ---
+        try {
+            const segBounds = L.latLngBounds(pts as any);
+            if (!segBounds.isValid()) return;
+
+            const curBounds = map.getBounds();
+            // shrink current bounds: if segment is near edge, we still treat as "not visible"
+            const strict = curBounds.pad(-0.08);
+
+            const alreadyVisible = strict.isValid() && strict.contains(segBounds);
+            if (alreadyVisible) return;
+
+            const center = segBounds.getCenter();
+
+            // needed zoom to fit; we must NOT zoom in, only allow zoom out
+            const neededZoom = map.getBoundsZoom(segBounds, true);
+            const curZoom = map.getZoom();
+            const targetZoom = Math.min(curZoom, neededZoom); // ✅ only zoom out (or keep)
+
+            // If not visible, ensure it becomes visible and centered
+            map.setView(center, targetZoom, { animate: true });
+        } catch {
+            // ignore
+        }
+    }, [map, fixesFull, activeClimb, watchKey]);
+
+    return null;
+}
+
+
 function FitBoundsController({
     fullBounds,
     windowBounds,
     win,
     isDragging,
     watchKey,
+    activeClimb,
 }: {
     fullBounds: LatLngBoundsExpression | null;
     windowBounds: LatLngBoundsExpression | null;
     win: TimeWindow | null;
     isDragging: boolean;
     watchKey?: unknown;
+    activeClimb: { startIdx: number; endIdx: number } | null; // ✅ neu
 }) {
     const map = useMap();
 
@@ -126,6 +219,7 @@ function FitBoundsController({
 
     React.useEffect(() => {
         if (isDragging) return;
+        if (activeClimb) return;
 
         // Decide what we want to fit to:
         // - If win exists: only fit if autoFitSelection is enabled
@@ -177,7 +271,7 @@ function FitBoundsController({
             if (tRef.current != null) window.clearTimeout(tRef.current);
             tRef.current = null;
         };
-    }, [map, fullBounds, windowBounds, win, isDragging, watchKey, autoFitSelection]);
+    }, [map, fullBounds, windowBounds, win, isDragging, watchKey, autoFitSelection, activeClimb]);
 
     return null;
 }
@@ -250,43 +344,7 @@ function colorForVario(v: number) {
     }
 }
 
-type ColorChunk = { color: string; positions: LatLngTuple[] };
 
-function buildChunksFromFixesWindow(fixes: FixPoint[], startIdx: number, endIdx: number): ColorChunk[] {
-    const n = fixes.length;
-    if (n < 2) return [];
-    const s = clamp(startIdx, 0, n - 2);
-    const e = clamp(endIdx, s + 1, n - 1);
-
-    const chunks: ColorChunk[] = [];
-    let lastColor = "";
-    let cur: LatLngTuple[] | null = null;
-
-    let lastV = 0;
-    for (let i = s; i < e; i++) {
-        const a = fixes[i];
-        const b = fixes[i + 1];
-
-        const dt = b.tSec - a.tSec;
-        if (dt > 0) lastV = (b.altitudeM - a.altitudeM) / dt;
-
-        const c = colorForVario(lastV);
-
-        const pA: LatLngTuple = [a.lat, a.lon];
-        const pB: LatLngTuple = [b.lat, b.lon];
-
-        if (c !== lastColor || cur == null) {
-            if (cur && cur.length >= 2) chunks.push({ color: lastColor, positions: cur });
-            lastColor = c;
-            cur = [pA, pB];
-        } else {
-            cur.push(pB);
-        }
-    }
-
-    if (cur && cur.length >= 2) chunks.push({ color: lastColor, positions: cur });
-    return chunks;
-}
 
 function computeBounds(points: LatLngTuple[]): LatLngBoundsExpression | null {
     if (points.length < 2) return null;
@@ -857,6 +915,7 @@ type FlightMapProps = {
     fixesFull: FixPoint[];
     fixesLite: FixPoint[];
     thermals: ThermalCircle[];
+    activeClimb: { startIdx: number; endIdx: number } | null;
 };
 
 export const FlightMap = React.memo(
@@ -865,6 +924,7 @@ export const FlightMap = React.memo(
         fixesFull,
         fixesLite,
         thermals,
+        activeClimb = null,
     }: FlightMapProps) {
 
         const baseMap = useFlightDetailsUiStore((s) => s.baseMap);
@@ -910,6 +970,9 @@ export const FlightMap = React.memo(
 
             return { latlngs, segColors };
         }, [fixesFull]);
+
+
+
 
         // Adapter: TimeWindow -> WindRange (avoid type coupling)
         const windRange = React.useMemo(() => {
@@ -970,7 +1033,6 @@ export const FlightMap = React.memo(
         const dragStyle = React.useMemo(() => dragStyleForZoomTopoGlow(zoom), [zoom]);
 
         const outlineWeight = line + outlineExtra;
-        const OUTLINE = "rgba(0, 0, 0, 0.51)";
 
         const tile = TILE[baseMap];
 
@@ -1094,6 +1156,12 @@ export const FlightMap = React.memo(
                             />
                         )}
 
+                        <ActiveClimbLayer
+                            fixesFull={fixesFull}
+                            activeClimb={activeClimb}
+                            watchKey={watchKey}
+                        />
+
                         <ZoomWatcher onZoom={setZoom} />
                         <MapAutoResize watchKey={watchKey} />
 
@@ -1103,6 +1171,7 @@ export const FlightMap = React.memo(
                             win={win}
                             isDragging={isDragging}
                             watchKey={watchKey}
+                            activeClimb={activeClimb}
                         />
 
                     </MapContainer>
@@ -1111,11 +1180,19 @@ export const FlightMap = React.memo(
         );
     },
     (prev, next) => {
+        const prevC = prev.activeClimb ?? null;
+        const nextC = next.activeClimb ?? null;
+
+        const sameClimb =
+            prevC === nextC ||
+            (!!prevC && !!nextC && prevC.startIdx === nextC.startIdx && prevC.endIdx === nextC.endIdx);
+
         return (
             prev.watchKey === next.watchKey &&
             prev.fixesFull === next.fixesFull &&
             prev.fixesLite === next.fixesLite &&
-            prev.thermals === next.thermals
+            prev.thermals === next.thermals &&
+            sameClimb
         );
     }
 );

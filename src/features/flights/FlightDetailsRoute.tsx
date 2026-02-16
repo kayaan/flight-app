@@ -45,6 +45,31 @@ interface AxisPointerLabelParams {
   [key: string]: any;
 }
 
+function buildActiveRangeMarkLine(range: { startSec: number; endSec: number } | null) {
+  if (!range) return [];
+
+  return [
+    {
+      id: "__activeClimbRange",
+      type: "line",
+      data: [],
+      silent: true,
+      markLine: {
+        symbol: "none",
+        lineStyle: {
+          color: "#ffd400",
+          width: 3,
+          opacity: 0.9,
+        },
+        data: [
+          { xAxis: range.startSec },
+          { xAxis: range.endSec },
+        ],
+      },
+    },
+  ];
+}
+
 const axisPointerLabelFormatter = (params: AxisPointerLabelParams) => {
   const v = params.value as any;
 
@@ -695,14 +720,55 @@ export function FlightDetailsRoute() {
   const climbs = React.useMemo(() => {
     const f = computed?.fixesFull ?? null;
     if (!f) return [];
-    return detectClimbPhases(f, {
+    const climbPhases = detectClimbPhases(f, {
       startGainM: 15,
       minGainM: 100,
       dropPct: 0.3,
       minDropAbsM: 75,
       minLenPts: 25,
     });
+
+    return climbPhases;
   }, [computed?.fixesFull]);
+
+  const [activeClimbIndex, setActiveClimbIndex] = React.useState<number | null>(null);
+
+  const hasClimbs = climbs.length > 0;
+  const climbNavActive = activeClimbIndex != null && hasClimbs;
+
+  const clearActiveClimb = React.useCallback(() => {
+    setActiveClimbIndex(null);
+  }, []);
+
+  const prevClimb = React.useCallback(() => {
+    if (!hasClimbs) return;
+    setActiveClimbIndex((prev) => {
+      if (prev == null) return 0; // wenn inaktiv: starte bei 0
+      return clamp(prev - 1, 0, climbs.length - 1);
+    });
+  }, [hasClimbs, climbs.length]);
+
+  const nextClimb = React.useCallback(() => {
+    if (!hasClimbs) return;
+    setActiveClimbIndex((prev) => {
+      if (prev == null) return 0; // wenn inaktiv: starte bei 0
+      return clamp(prev + 1, 0, climbs.length - 1);
+    });
+  }, [hasClimbs, climbs.length]);
+
+  React.useEffect(() => {
+    if (!climbs.length) {
+      setActiveClimbIndex(null);
+      return;
+    }
+    setActiveClimbIndex((prev) => {
+      if (prev == null) return prev; // keep inactive
+      return clamp(prev, 0, climbs.length - 1);
+    });
+  }, [climbs.length]);
+
+
+
 
   const thermals = React.useMemo(() => {
     const f = computed?.fixesFull ?? null;
@@ -854,19 +920,72 @@ export function FlightDetailsRoute() {
   const isDragging = useTimeWindowStore((s) => s.isDragging);
   const setWindowThrottled = useTimeWindowStore((s) => s.setWindowThrottled);
 
-  const startSec = win?.startSec ?? 0;
-  const endSec = win?.endSec ?? 0;
-  const totalSec = win?.totalSec ?? (chartData?.maxT ?? 0);
+  const winStartSec = win?.startSec ?? 0;
+  const winEndSec = win?.endSec ?? 0;
+  const winTotalSec = win?.totalSec ?? (chartData?.maxT ?? 0);
+
+
+
+  const activeClimb = React.useMemo(() => {
+    if (activeClimbIndex == null) return null;
+    if (!climbs.length) return null;
+    const i = clamp(activeClimbIndex, 0, climbs.length - 1);
+    return climbs[i] ?? null;
+  }, [activeClimbIndex, climbs]);
+
+  const activeClimbOverlay = React.useMemo(() => {
+    const f = computed?.fixesFull ?? null;
+    if (!activeClimb || !f) return null;
+
+    const s = f[activeClimb.startIdx]?.tSec;
+    const e = f[activeClimb.endIdx]?.tSec; // ✅ endIdx wie gewünscht
+    if (!Number.isFinite(s) || !Number.isFinite(e)) return null;
+
+    const a = Math.min(s as number, e as number);
+    const b = Math.max(s as number, e as number);
+
+    return {
+      startSec: a,
+      endSec: b,
+    };
+  }, [computed?.fixesFull, activeClimb]);
+
+  const activeRange = React.useMemo(() => {
+    if (!activeClimb || !computed?.fixesFull?.length) return null;
+
+    const f = computed.fixesFull;
+
+    const s = f[activeClimb.startIdx]?.tSec;
+    const e = f[activeClimb.endIdx]?.tSec;
+
+    if (!Number.isFinite(s) || !Number.isFinite(e)) return null;
+
+    return { startSec: s as number, endSec: e as number };
+  }, [activeClimb, computed?.fixesFull]);
+
+  const statsSource = activeClimb ? ("climb" as const) : ("window" as const);
+
+  const statsRange = React.useMemo(() => {
+    const f = computed?.fixesFull ?? null;
+    if (activeClimb && f) {
+      const s = f[activeClimb.startIdx]?.tSec;
+      const e = f[activeClimb.endIdx]?.tSec;
+      if (Number.isFinite(s) && Number.isFinite(e)) {
+        return { startSec: s as number, endSec: e as number };
+      }
+    }
+    return { startSec: winStartSec, endSec: winEndSec };
+  }, [computed?.fixesFull, activeClimb, winStartSec, winEndSec]);
 
   const windowMarkLine = React.useMemo(() => {
     if (!win) return undefined;
-    return buildWindowMarkLine(startSec, endSec, totalSec);
-  }, [win, startSec, endSec, totalSec]);
+    return buildWindowMarkLine(winStartSec, winEndSec, winTotalSec);
+  }, [win, winStartSec, winEndSec, winTotalSec]);
 
   const segmentStats = React.useMemo(() => {
     if (!computed?.series || !chartData?.vSpeed) return null;
-    return computeSegmentStats(computed.series, chartData.vSpeed, startSec, endSec);
-  }, [computed?.series, chartData?.vSpeed, startSec, endSec]);
+    return computeSegmentStats(computed.series, chartData.vSpeed, statsRange.startSec, statsRange.endSec);
+  }, [computed?.series, chartData?.vSpeed, statsRange.startSec, statsRange.endSec]);
 
   const altOption = React.useMemo(() => {
     if (!chartData) return {};
@@ -896,6 +1015,35 @@ export function FlightDetailsRoute() {
       series: [
         { id: "alt", name: "Altitude", type: "line", data: chartData.alt, showSymbol: false, lineStyle: { width: 2 } },
         { id: "__window", name: "__window", type: "line", data: [], silent: true, markLine: windowMarkLine },
+        {
+          id: "__activeClimb",
+          name: "__activeClimb",
+          type: "line",
+          data: [],
+          silent: true,
+          z: 10, // nach vorne
+          markArea: activeClimbOverlay
+            ? {
+              silent: true,
+              itemStyle: {
+                color: "rgba(255, 77, 79, 0.10)", // leichtes Band
+              },
+              data: [[{ xAxis: activeClimbOverlay.startSec }, { xAxis: activeClimbOverlay.endSec }]],
+            }
+            : undefined,
+          markLine: activeClimbOverlay
+            ? {
+              silent: true,
+              symbol: "none",
+              label: { show: false },
+              lineStyle: {
+                color: "rgba(255, 77, 79, 0.95)",
+                width: 3,
+              },
+              data: [{ xAxis: activeClimbOverlay.startSec }, { xAxis: activeClimbOverlay.endSec }],
+            }
+            : undefined,
+        },
         {
           id: "__preview",
           name: "__preview",
@@ -932,7 +1080,7 @@ export function FlightDetailsRoute() {
         },
       ],
     };
-  }, [chartData, baseOption, windowMarkLine, climbMarkLineData, showClimbLinesOnChart]);
+  }, [chartData, baseOption, windowMarkLine, climbMarkLineData, showClimbLinesOnChart, activeClimbOverlay]);
 
   const varioOption = React.useMemo(() => {
     if (!chartData) return {};
@@ -1127,7 +1275,10 @@ export function FlightDetailsRoute() {
             Segment Stats
           </Text>
           <Text size="xs" c="dimmed">
-            {fmtTime(Math.min(startSec, endSec))} → {fmtTime(Math.max(startSec, endSec))} / {fmtTime(totalSec)}
+            {statsSource === "climb" && climbNavActive
+              ? `Climb ${activeClimbIndex! + 1}/${climbs.length} · `
+              : "Window · "}
+            {fmtTime(Math.min(statsRange.startSec, statsRange.endSec))} → {fmtTime(Math.max(statsRange.startSec, statsRange.endSec))} / {fmtTime(winTotalSec)}
           </Text>
         </Group>
 
@@ -1210,14 +1361,25 @@ export function FlightDetailsRoute() {
         </SimpleGrid>
       </Paper>
     );
-  }, [showStats, segmentStats, startSec, endSec, totalSec, varioWindowSec]);
+  }, [
+    showStats,
+    segmentStats,
+    varioWindowSec,
+    statsSource,
+    climbNavActive,
+    activeClimbIndex,
+    climbs.length,
+    statsRange.startSec,
+    statsRange.endSec,
+    winTotalSec,
+  ]);
 
   const zoomChartsToWindow = React.useCallback(() => {
-    const maxT = chartData?.maxT ?? totalSec ?? 0;
+    const maxT = chartData?.maxT ?? winTotalSec ?? 0;
     if (!Number.isFinite(maxT) || maxT <= 0) return;
 
-    let zs = Math.min(startSec, endSec);
-    let ze = Math.max(startSec, endSec);
+    let zs = Math.min(winStartSec, winEndSec);
+    let ze = Math.max(winStartSec, winEndSec);
 
     if (!Number.isFinite(zs) || !Number.isFinite(ze) || Math.abs(ze - zs) < 0.0001) {
       zs = 0;
@@ -1238,7 +1400,7 @@ export function FlightDetailsRoute() {
     if (showSpeed && speedInstRef.current) {
       speedInstRef.current.dispatchAction?.({ type: "dataZoom", dataZoomIndex: 0, startValue: zs, endValue: ze });
     }
-  }, [chartData?.maxT, totalSec, startSec, endSec, showAlt, showVario, showSpeed]);
+  }, [chartData?.maxT, winTotalSec, winStartSec, winEndSec, showAlt, showVario, showSpeed]);
 
   React.useEffect(() => {
     if (!zoomSyncEnabled) return;
@@ -1248,7 +1410,7 @@ export function FlightDetailsRoute() {
   }, [zoomSyncEnabled, isDragging, zoomChartsToWindow, win]);
 
   const resetChartsZoom = React.useCallback(() => {
-    const maxT = chartData?.maxT ?? totalSec ?? 0;
+    const maxT = chartData?.maxT ?? winTotalSec ?? 0;
     if (!Number.isFinite(maxT) || maxT <= 0) return;
 
     const zs = 0;
@@ -1264,7 +1426,7 @@ export function FlightDetailsRoute() {
     if (showSpeed && speedInstRef.current) {
       speedInstRef.current.dispatchAction?.({ type: "dataZoom", dataZoomIndex: 0, startValue: zs, endValue: ze });
     }
-  }, [chartData?.maxT, totalSec, showAlt, showVario, showSpeed]);
+  }, [chartData?.maxT, winTotalSec, showAlt, showVario, showSpeed]);
 
   const zoomDisabled =
     !chartData ||
@@ -1287,6 +1449,132 @@ export function FlightDetailsRoute() {
     if (showSpeed && speedInstRef.current) out.push({ kind: "speed", inst: speedInstRef.current });
     return out;
   }, [showAlt, showVario, showSpeed]);
+
+
+  function getVisibleXRange(inst: any, fallbackMaxT: number): { min: number; max: number } {
+    try {
+      const model = inst.getModel?.();
+      const xAxis = model?.getComponent?.("xAxis", 0);
+      const scale = xAxis?.axis?.scale;
+      const ext = scale?.getExtent?.(); // [min,max]
+      if (Array.isArray(ext) && ext.length === 2) {
+        const min = Number(ext[0]);
+        const max = Number(ext[1]);
+        if (Number.isFinite(min) && Number.isFinite(max) && max > min) return { min, max };
+      }
+    } catch { }
+    return { min: 0, max: Number.isFinite(fallbackMaxT) ? fallbackMaxT : 0 };
+  }
+
+  function applyRangeToCharts(
+    charts: Array<{ kind: "alt" | "vario" | "speed"; inst: any }>,
+    startValue: number,
+    endValue: number
+  ) {
+    for (const { kind, inst } of charts) {
+      const idxs = kind === "alt" ? [0, 1] : [0];
+      for (const dataZoomIndex of idxs) {
+        inst.dispatchAction?.({ type: "dataZoom", dataZoomIndex, startValue, endValue });
+      }
+    }
+  }
+
+  function clampRange(start: number, end: number, maxT: number) {
+    let s = start;
+    let e = end;
+    if (!Number.isFinite(maxT) || maxT <= 0) return { s, e };
+
+    // clamp
+    s = Math.max(0, Math.min(s, maxT));
+    e = Math.max(0, Math.min(e, maxT));
+
+    // ensure order
+    if (e < s) [s, e] = [e, s];
+
+    return { s, e };
+  }
+
+  React.useEffect(() => {
+    if (!activeClimb) return;
+    if (isDragging) return; // nicht reinfunken während Range-Select
+
+    const f = computed?.fixesFull ?? null;
+    if (!f) return;
+
+    const sRaw = f[activeClimb.startIdx]?.tSec;
+    const eRaw = f[activeClimb.endIdx]?.tSec;
+    if (!Number.isFinite(sRaw) || !Number.isFinite(eRaw)) return;
+
+    const cs = Math.min(sRaw as number, eRaw as number);
+    const ce = Math.max(sRaw as number, eRaw as number);
+
+    const charts = getVisibleCharts();
+    if (!charts.length) return;
+
+    // Primary sichtbarer Bereich (alt bevorzugt)
+    const primary = charts.find((c) => c.kind === "alt") ?? charts[0];
+    const maxT = chartData?.maxT ?? winTotalSec ?? ce;
+
+    const { min, max } = getVisibleXRange(primary.inst, maxT);
+    const span = max - min;
+    if (!(span > 0)) return;
+
+    const PAD = 0.75; // Sekunden Padding links/rechts
+    const needLeft = cs < min + PAD;
+    const needRight = ce > max - PAD;
+
+    // schon sichtbar → nix
+    if (!needLeft && !needRight) return;
+
+    const climbLen = ce - cs;
+    const minNeededSpan = climbLen + 2 * PAD;
+
+    let newStart = min;
+    let newEnd = max;
+
+    if (minNeededSpan > span) {
+      // ✅ darf: rauszoomen (Span vergrößern), aber NICHT reinzoomen
+      newStart = cs - PAD;
+      newEnd = ce + PAD;
+    } else {
+      // ✅ nur pannen/scrollen (Span bleibt gleich) — aber mittig (wenn nicht am Rand)
+      const center = (cs + ce) / 2;
+      newStart = center - span / 2;
+      newEnd = center + span / 2;
+    }
+
+    // clamp an [0..maxT]
+    let { s, e } = clampRange(newStart, newEnd, maxT);
+
+    // wenn wir durch Clamp am Rand gelandet sind, ist "mittig" nicht möglich -> ok so.
+    // wenn wir NICHT am Rand sind, stellen wir sicher, dass der Climb wirklich mittig-ish ist.
+    const hitLeftEdge = s <= 0.0001;
+    const hitRightEdge = (chartData?.maxT ?? winTotalSec ?? 0) > 0 && e >= (chartData?.maxT ?? winTotalSec ?? 0) - 0.0001;
+
+    if (!hitLeftEdge && !hitRightEdge) {
+      const center = (cs + ce) / 2;
+      s = center - span / 2;
+      e = center + span / 2;
+      ({ s, e } = clampRange(s, e, maxT));
+    }
+
+    // Edge-case: am Rand geclamped, Climb trotzdem nicht drin → dann rauszoomen (Span erhöhen)
+    const stillMissing = cs < s + PAD || ce > e - PAD;
+    if (stillMissing) {
+      s = Math.max(0, cs - PAD);
+      e = Math.min(maxT, ce + PAD);
+    }
+
+    applyRangeToCharts(charts, s, e);
+  }, [
+    activeClimb,
+    computed?.fixesFull,
+    isDragging,
+    getVisibleCharts,
+    chartData?.maxT,
+    winTotalSec,
+  ]);
+
 
   const zoomSyncLockRef = React.useRef(false);
 
@@ -1406,7 +1694,7 @@ export function FlightDetailsRoute() {
 
         setDragging(true);
 
-        const maxT = chartData?.maxT ?? totalSec ?? 0;
+        const maxT = chartData?.maxT ?? winTotalSec ?? 0;
 
         setWindowThrottled({
           startSec: t,
@@ -1439,7 +1727,7 @@ export function FlightDetailsRoute() {
 
           const a = Math.min(s0, s1);
           const b = Math.max(s0, s1);
-          const maxT = chartData?.maxT ?? totalSec ?? 0;
+          const maxT = chartData?.maxT ?? winTotalSec ?? 0;
 
           setWindowThrottled({
             startSec: a,
@@ -1467,7 +1755,7 @@ export function FlightDetailsRoute() {
 
         setPanEnabled(kind, true);
 
-        const maxT = chartData?.maxT ?? totalSec ?? 0;
+        const maxT = chartData?.maxT ?? winTotalSec ?? 0;
 
         if (startT == null || lastT == null) {
           clearPreviewAll();
@@ -1535,7 +1823,7 @@ export function FlightDetailsRoute() {
         zr.off("globalout", onGlobalOut);
       };
     },
-    [chartData?.maxT, totalSec, setDragging, setPanEnabled, setPreviewLinesAll, clearPreviewAll, setWindow, setWindowThrottled]
+    [chartData?.maxT, winTotalSec, setDragging, setPanEnabled, setPreviewLinesAll, clearPreviewAll, setWindow, setWindowThrottled]
   );
 
   React.useEffect(() => {
@@ -1636,6 +1924,41 @@ export function FlightDetailsRoute() {
           </Button>
 
           <Group gap="md" align="center">
+
+            <Button
+              size="xs"
+              variant="light"
+              onClick={prevClimb}
+              disabled={!hasClimbs}
+            >
+              Prev climb
+            </Button>
+
+            <Button
+              size="xs"
+              variant="light"
+              onClick={nextClimb}
+              disabled={!hasClimbs}
+            >
+              Next climb
+            </Button>
+
+            <Button
+              size="xs"
+              variant="subtle"
+              onClick={clearActiveClimb}
+              disabled={!climbNavActive}
+            >
+              Clear climb
+            </Button>
+
+            <Text size="xs" c="dimmed" style={{ minWidth: 110, textAlign: "right" }}>
+              {climbNavActive
+                ? `Climb ${activeClimbIndex! + 1} / ${climbs.length}`
+                : hasClimbs
+                  ? `${climbs.length} climbs`
+                  : "No climbs"}
+            </Text>
 
             <Checkbox
               label="Climb lines"
@@ -1868,6 +2191,7 @@ export function FlightDetailsRoute() {
                   fixesFull={mapFixesFull}
                   fixesLite={mapFixesLite}
                   thermals={mapThermals}
+                  activeClimb={activeClimb ? { startIdx: activeClimb.startIdx, endIdx: activeClimb.endIdx } : null}
                   watchKey={`${id}-${baseMap}`}
                 />
               </Box>
