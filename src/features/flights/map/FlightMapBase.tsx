@@ -54,8 +54,9 @@ const TILE = {
     osm: {
         key: "osm",
         url: "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
-        attribution:
-            '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+        maxNativeZoom: 19,
+        maxZoom: 19,
     },
 
     topo: {
@@ -63,16 +64,18 @@ const TILE = {
         url: "https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png",
         attribution:
             'Map data: &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, SRTM | Map style: &copy; <a href="https://opentopomap.org">OpenTopoMap</a> (CC-BY-SA)',
+        maxNativeZoom: 17,
+        maxZoom: 17,
     },
 
-    // ✅ Esri "Topo Lite" (bei dir so benannt)
-    // Hinweis: Esri hat kein offizielles "Topo Lite" als Service-Name;
-    // wenn du "Topo aber ruhiger" meinst, passt Light Gray Canvas am besten.
-    esriTopoLite: {
-        key: "esriTopoLite",
+    esriBalanced: {
+        key: "esriBalanced",
         url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}",
-        attribution:
-            "Tiles © Esri — Source: Esri, DeLorme, NAVTEQ, USGS, Intermap, iPC, NRCAN, Esri Japan, METI, Esri China (Hong Kong), Esri (Thailand), TomTom",
+        referenceUrl:
+            "https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Reference_Overlay/MapServer/tile/{z}/{y}/{x}",
+        attribution: "Tiles © Esri — Source: Esri, Garmin, USGS, NGA",
+        maxNativeZoom: 19,
+        maxZoom: 19,
     },
 } as const;
 
@@ -910,6 +913,8 @@ type FlightMapProps = {
 export const FlightMap = React.memo(
     function FlightMap({ watchKey, focusKey = 0, fixesFull, fixesLite, thermals, activeClimb = null }: FlightMapProps) {
         const baseMap = useFlightDetailsUiStore((s) => s.baseMap);
+        const isEsri = baseMap === "esriBalanced";
+
         const followEnabled = useFlightDetailsUiStore((s) => s.followEnabled);
         const showThermalsOnMap = useFlightDetailsUiStore((s) => s.showThermalsOnMap);
 
@@ -1032,7 +1037,13 @@ export const FlightMap = React.memo(
 
         const outlineWeight = line + outlineExtra;
 
-        const tile = TILE[baseMap as keyof typeof TILE] ?? TILE.esriTopoLite;
+        type TileKey = keyof typeof TILE;
+
+        function isTileKey(k: unknown): k is TileKey {
+            return typeof k === "string" && k in TILE;
+        }
+
+        const tile = isTileKey(baseMap) ? TILE[baseMap] : TILE.esriBalanced;
 
         // ✅ use uiTotalSec for UI percentages
         const startPct = pct(startSec, uiTotalSec);
@@ -1087,10 +1098,37 @@ export const FlightMap = React.memo(
                     />
                 </Box>
 
-
                 <Box style={{ flex: 1, minHeight: 0 }}>
-                    <MapContainer className="fly-map" center={center} zoom={initialZoom} style={{ height: "100%", width: "100%" }} preferCanvas>
-                        <TileLayer key={tile.key} url={tile.url} attribution={tile.attribution} />
+                    <MapContainer
+                        className={`fly-map ${isEsri ? "esri-contrast" : ""}`}
+                        center={center}
+                        zoom={initialZoom}
+                        style={{ height: "100%", width: "100%" }}
+                        preferCanvas>
+
+                        {"referenceUrl" in tile ? (
+                            <>
+                                <TileLayer
+                                    url={tile.url}
+                                    attribution={tile.attribution}
+                                    maxNativeZoom={tile.maxNativeZoom}
+                                    maxZoom={tile.maxZoom}
+                                />
+                                <TileLayer
+                                    url={tile.referenceUrl}
+                                    attribution=""
+                                    maxNativeZoom={tile.maxNativeZoom}
+                                    maxZoom={tile.maxZoom}
+                                />
+                            </>
+                        ) : (
+                            <TileLayer
+                                url={tile.url}
+                                attribution={tile.attribution}
+                                maxNativeZoom={tile.maxNativeZoom}
+                                maxZoom={tile.maxZoom}
+                            />
+                        )}
 
                         {/* Base track */}
                         <ActiveTrackLayer

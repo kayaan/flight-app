@@ -2,7 +2,7 @@
 import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
 
-export type BaseMap = "osm" | "topo" | "esriTopoLite";
+export type BaseMap = "osm" | "topo" | "esriBalanced";
 
 function clamp(n: number, min: number, max: number) {
     return Math.min(max, Math.max(min, n));
@@ -69,7 +69,7 @@ const DEFAULTS = {
 
     varioWindowSec: 4,
 
-    baseMap: "esriTopoLite" as BaseMap,
+    baseMap: "esriBalanced" as BaseMap,
 
     showClimbPhases: true,
 
@@ -143,7 +143,7 @@ export const useFlightDetailsUiStore = create<FlightDetailsUiState>()(
 
                 // normalize baseMap
                 const baseMap: BaseMap =
-                    persisted.baseMap === "osm" || persisted.baseMap === "topo" || persisted.baseMap === "esriTopoLite"
+                    persisted.baseMap === "osm" || persisted.baseMap === "topo" || persisted.baseMap === "esriBalanced"
                         ? persisted.baseMap
                         : DEFAULTS.baseMap;
 

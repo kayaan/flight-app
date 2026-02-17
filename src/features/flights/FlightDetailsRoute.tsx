@@ -2251,7 +2251,7 @@ export function FlightDetailsRoute() {
                 <Group gap="xs">
                   <Chip value="osm" radius="sm" variant="filled">OSM</Chip>
                   <Chip value="topo" radius="sm" variant="filled">Topo</Chip>
-                  <Chip value="esriTopoLite" radius="sm" variant="filled">Topo Lite</Chip>
+                  <Chip value="esriBalanced" radius="sm" variant="filled">Topo Lite</Chip>
                 </Group>
               </Chip.Group>
             </Box>
