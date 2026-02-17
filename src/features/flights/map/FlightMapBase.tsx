@@ -21,7 +21,6 @@ import { useFlightDetailsUiStore } from "../store/flightDetailsUi.store";
 import type { ThermalCircle } from "../analysis/turns/detectThermalCircles";
 import { DualRangeSlider } from "./DualRangeSlider";
 
-export type BaseMap = "osm" | "topo";
 
 const FOLLOW_MAX_ZOOM = 14; // wenn Follow an: nicht näher als das
 const FOLLOW_FIT_PADDING = 60; // px padding beim fitBounds
@@ -55,15 +54,28 @@ const TILE = {
     osm: {
         key: "osm",
         url: "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
-        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+        attribution:
+            '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
     },
+
     topo: {
         key: "topo",
         url: "https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png",
         attribution:
             'Map data: &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, SRTM | Map style: &copy; <a href="https://opentopomap.org">OpenTopoMap</a> (CC-BY-SA)',
     },
+
+    // ✅ Esri "Topo Lite" (bei dir so benannt)
+    // Hinweis: Esri hat kein offizielles "Topo Lite" als Service-Name;
+    // wenn du "Topo aber ruhiger" meinst, passt Light Gray Canvas am besten.
+    esriTopoLite: {
+        key: "esriTopoLite",
+        url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}",
+        attribution:
+            "Tiles © Esri — Source: Esri, DeLorme, NAVTEQ, USGS, Intermap, iPC, NRCAN, Esri Japan, METI, Esri China (Hong Kong), Esri (Thailand), TomTom",
+    },
 } as const;
+
 
 function MapAutoResize({ watchKey }: { watchKey?: unknown }) {
     const map = useMap();
@@ -1020,7 +1032,7 @@ export const FlightMap = React.memo(
 
         const outlineWeight = line + outlineExtra;
 
-        const tile = TILE[baseMap];
+        const tile = TILE[baseMap as keyof typeof TILE] ?? TILE.esriTopoLite;
 
         // ✅ use uiTotalSec for UI percentages
         const startPct = pct(startSec, uiTotalSec);
@@ -1077,7 +1089,7 @@ export const FlightMap = React.memo(
 
 
                 <Box style={{ flex: 1, minHeight: 0 }}>
-                    <MapContainer center={center} zoom={initialZoom} style={{ height: "100%", width: "100%" }} preferCanvas>
+                    <MapContainer className="fly-map" center={center} zoom={initialZoom} style={{ height: "100%", width: "100%" }} preferCanvas>
                         <TileLayer key={tile.key} url={tile.url} attribution={tile.attribution} />
 
                         {/* Base track */}

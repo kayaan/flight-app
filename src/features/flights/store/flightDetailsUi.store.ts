@@ -2,7 +2,7 @@
 import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
 
-export type BaseMap = "topo" | "osm";
+export type BaseMap = "osm" | "topo" | "esriTopoLite";
 
 function clamp(n: number, min: number, max: number) {
     return Math.min(max, Math.max(min, n));
@@ -69,7 +69,7 @@ const DEFAULTS = {
 
     varioWindowSec: 4,
 
-    baseMap: "topo" as BaseMap,
+    baseMap: "esriTopoLite" as BaseMap,
 
     showClimbPhases: true,
 
@@ -99,7 +99,7 @@ export const useFlightDetailsUiStore = create<FlightDetailsUiState>()(
                 set({ varioWindowSec: clamp(Math.round(n), 1, 30) });
             },
 
-            setBaseMap: (v) => set({ baseMap: v === "osm" ? "osm" : "topo" }),
+            setBaseMap: (v) => set({ baseMap: v }),
 
             setShowClimbPhases: (v) => set({ showClimbPhases: !!v }),
 
@@ -114,7 +114,7 @@ export const useFlightDetailsUiStore = create<FlightDetailsUiState>()(
         }),
         {
             name: "flyapp.flightDetails.uiPrefs",
-            version: 2, // ✅ bumped because we added fields
+            version: 3, // ✅ bumped because we added fields
             storage: createJSONStorage(() => localStorage),
             partialize: (s) => ({
                 autoFitSelection: s.autoFitSelection,
@@ -143,7 +143,7 @@ export const useFlightDetailsUiStore = create<FlightDetailsUiState>()(
 
                 // normalize baseMap
                 const baseMap: BaseMap =
-                    persisted.baseMap === "osm" || persisted.baseMap === "topo"
+                    persisted.baseMap === "osm" || persisted.baseMap === "topo" || persisted.baseMap === "esriTopoLite"
                         ? persisted.baseMap
                         : DEFAULTS.baseMap;
 
