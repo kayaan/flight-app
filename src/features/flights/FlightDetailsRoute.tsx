@@ -2102,6 +2102,16 @@ export function FlightDetailsRoute() {
           </Group>
 
           <Group gap="xs" align="center" wrap="nowrap">
+
+            <Group justify="space-between">
+              <Button size="xs" variant="light" onClick={resetSelection} disabled={!win}>
+                Reset selection
+              </Button>
+
+              <Button size="xs" variant="light" onClick={zoomChartsToWindow} disabled={zoomDisabled}>
+                Zoom to window
+              </Button>
+            </Group>
             <Button size="xs" variant={followEnabled ? "filled" : "light"} onClick={() => setFollowEnabled(!followEnabled)}>
               Follow
             </Button>
@@ -2257,16 +2267,6 @@ export function FlightDetailsRoute() {
             </Box>
 
             <Divider />
-
-            <Group justify="space-between">
-              <Button size="xs" variant="light" onClick={resetSelection} disabled={!win}>
-                Reset selection
-              </Button>
-
-              <Button size="xs" variant="light" onClick={zoomChartsToWindow} disabled={zoomDisabled}>
-                Zoom to window
-              </Button>
-            </Group>
 
             <NumberInput
               label="Vario win (s)"
