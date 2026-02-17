@@ -1108,15 +1108,20 @@ export const FlightMap = React.memo(
 
                         {"referenceUrl" in tile ? (
                             <>
+                                {/* ✅ Base: nur HIER Kontrast/Filter */}
                                 <TileLayer
                                     url={tile.url}
                                     attribution={tile.attribution}
                                     maxNativeZoom={tile.maxNativeZoom}
                                     maxZoom={tile.maxZoom}
+                                    className={isEsri ? "esri-terrain-base" : undefined}
                                 />
+
                                 <TileLayer
-                                    url={tile.referenceUrl}
+                                    url={tile.url}
                                     attribution=""
+                                    opacity={0.35}
+                                    className="esri-ink"
                                     maxNativeZoom={tile.maxNativeZoom}
                                     maxZoom={tile.maxZoom}
                                 />

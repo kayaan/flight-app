@@ -126,3 +126,10 @@ button:focus-visible {
 
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
 }
+
+
+.fly-map .leaflet-layer.esri-ink {
+  mix-blend-mode: multiply;
+  filter: grayscale(3) contrast(2.5) brightness(0.95);
+  pointer-events: none;
+}
