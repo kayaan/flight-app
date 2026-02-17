@@ -1648,6 +1648,12 @@ export function FlightDetailsRoute() {
 
   React.useEffect(() => {
     if (!activeClimb) return;
+
+    if (suppressAutoPanOnceRef.current) {
+      suppressAutoPanOnceRef.current = false; // one-shot
+      return;
+    }
+
     if (isDragging) return;
 
     const f = computed?.fixesFull ?? null;
@@ -2068,6 +2074,11 @@ export function FlightDetailsRoute() {
     return copy;
   }, [climbs, climbSortMode]);
 
+  const setShowAlt = useFlightDetailsUiStore((s) => s.setShowAlt);
+  const setShowVario = useFlightDetailsUiStore((s) => s.setShowVario);
+  const setShowSpeed = useFlightDetailsUiStore((s) => s.setShowSpeed);
+  const suppressAutoPanOnceRef = React.useRef(false);
+
   return (
     <Box p="md">
       <Stack gap="sm">
@@ -2156,6 +2167,108 @@ export function FlightDetailsRoute() {
                 {id}
               </Text>
             </Group>
+            <Divider my="sm" />
+
+            <Box>
+              <Group justify="space-between" align="center" mb={6}>
+                <Text fw={600} size="sm">Climbs</Text>
+                <Badge variant="light">{climbs.length}</Badge>
+              </Group>
+
+              {!hasClimbs ? (
+                <Text c="dimmed" size="sm">No climbs detected.</Text>
+              ) : (
+                <Stack gap="xs">
+                  <Chip.Group
+                    value={climbSortMode}
+                    onChange={(v) => setClimbSortMode((v ?? "normal") as ClimbSortMode)}
+                  >
+                    <Group gap="xs">
+                      <Chip value="normal" radius="sm">Normal</Chip>
+                      <Chip value="gainDesc" radius="sm">Gain ↓</Chip>
+                      <Chip value="gainAsc" radius="sm">Gain ↑</Chip>
+                    </Group>
+                  </Chip.Group>
+
+                  <Divider my={6} />
+
+                  <Stack gap="xs">
+                    {sortedClimbs.map((c, listIdx) => {
+                      const f = computed?.fixesFull ?? [];
+                      const sSec = f[c.startIdx]?.tSec ?? null;
+                      const eSec = f[c.endIdx]?.tSec ?? null;
+
+                      const durSec =
+                        typeof sSec === "number" && typeof eSec === "number"
+                          ? Math.max(0, eSec - sSec)
+                          : null;
+
+                      const originalIndex = climbs.findIndex(
+                        (cl) => cl.startIdx === c.startIdx && cl.endIdx === c.endIdx
+                      );
+
+                      const isActive = originalIndex !== -1 && activeClimbIndex === originalIndex;
+
+                      return (
+                        <Paper
+                          key={`${c.startIdx}-${c.endIdx}-${listIdx}`}
+                          withBorder
+                          p="sm"
+                          radius="md"
+                          style={{
+                            cursor: "pointer",
+                            borderColor: isActive ? "rgba(255,212,0,0.9)" : undefined,
+                            boxShadow: isActive ? "0 0 0 2px rgba(255,212,0,0.25)" : undefined,
+                          }}
+                          onClick={() => {
+                            if (originalIndex !== -1) {
+                              suppressAutoPanOnceRef.current = true;   // ✅ kein Auto-Zoom dafür
+                              setActiveClimbIndex(originalIndex);
+                            }
+                            setClimbListOpen(false);
+                          }}
+                        >
+                          <Group justify="space-between" align="flex-start" wrap="nowrap">
+                            <Box>
+                              <Text fw={700} size="sm">
+                                Climb {originalIndex !== -1 ? originalIndex + 1 : listIdx + 1}
+                              </Text>
+                              <Text size="xs" c="dimmed">
+                                {durSec == null ? "—" : fmtTime(durSec)} · {Math.round(c.startAltM)} → {Math.round(c.peakAltM)} m
+                              </Text>
+                            </Box>
+
+                            <Text fw={700} size="sm">
+                              {durSec && durSec > 0 ? `${(c.gainM / durSec).toFixed(2)} m/s` : "—"}
+                            </Text>
+                          </Group>
+
+                          <Divider my={8} />
+
+                          <SimpleGrid cols={3} spacing="xs" verticalSpacing="xs">
+                            <Box>
+                              <Text size="xs" c="dimmed">Start</Text>
+                              <Text fw={600} size="sm">{Math.round(c.startAltM)} m</Text>
+                            </Box>
+                            <Box>
+                              <Text size="xs" c="dimmed">Gain</Text>
+                              <Text fw={700} size="sm" style={{ color: "rgba(255,212,0,1)" }}>
+                                {fmtSigned(c.gainM, 0)} m
+                              </Text>
+                            </Box>
+                            <Box>
+                              <Text size="xs" c="dimmed">Peak</Text>
+                              <Text fw={600} size="sm">{Math.round(c.peakAltM)} m</Text>
+                            </Box>
+                          </SimpleGrid>
+                        </Paper>
+                      );
+                    })}
+                  </Stack>
+                </Stack>
+              )}
+            </Box>
+
 
             <SimpleGrid cols={2} spacing="xs" verticalSpacing="xs">
               <Box>
@@ -2217,22 +2330,41 @@ export function FlightDetailsRoute() {
                 Charts
               </Text>
 
-              <Chip.Group
-                value={climbSortMode}
-                onChange={(v) => setClimbSortMode((v ?? "normal") as ClimbSortMode)}
-              >
-                <Group gap="xs">
-                  <Chip value="alt" radius="sm" variant="filled">
-                    Alt
-                  </Chip>
-                  <Chip value="vario" radius="sm" variant="filled">
-                    Vario
-                  </Chip>
-                  <Chip value="speed" radius="sm" variant="filled">
-                    Speed
-                  </Chip>
-                </Group>
-              </Chip.Group>
+              {(() => {
+                type ChartToggle = "alt" | "vario" | "speed";
+
+                const chartSelection: ChartToggle[] = [
+                  showAlt ? "alt" : null,
+                  showVario ? "vario" : null,
+                  showSpeed ? "speed" : null,
+                ].filter(Boolean) as ChartToggle[];
+
+                return (
+                  <Chip.Group
+                    multiple
+                    value={chartSelection}
+                    onChange={(vals) => {
+                      const v = (vals ?? []) as ChartToggle[];
+                      setShowAlt(v.includes("alt"));
+                      setShowVario(v.includes("vario"));
+                      setShowSpeed(v.includes("speed"));
+                    }}
+                  >
+                    <Group gap="xs">
+                      <Chip value="alt" radius="sm" variant="filled">
+                        Alt
+                      </Chip>
+                      <Chip value="vario" radius="sm" variant="filled">
+                        Vario
+                      </Chip>
+                      <Chip value="speed" radius="sm" variant="filled">
+                        Speed
+                      </Chip>
+                    </Group>
+                  </Chip.Group>
+                );
+              })()}
+
 
               <Divider my="sm" />
 
@@ -2355,7 +2487,7 @@ export function FlightDetailsRoute() {
                     }}
                     onClick={() => {
                       if (originalIndex !== -1) setActiveClimbIndex(originalIndex);
-                      setClimbListOpen(false); // ✅ richtig: Climb Drawer schließen
+                      setClimbListOpen(false);
                     }}
                   >
                     <Group justify="space-between" align="flex-start" wrap="nowrap">
