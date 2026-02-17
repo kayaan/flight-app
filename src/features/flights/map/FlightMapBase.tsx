@@ -1036,7 +1036,20 @@ export const FlightMap = React.memo(
                 </Group>
 
                 {/* ✅ Slider wrapper (Option A): highlight active climb underneath the handles */}
-                <Box style={{ position: "relative", paddingTop: 6, paddingBottom: 6, paddingLeft: 20, paddingRight: 20, marginBottom: 18 }}>
+                <Box
+                    style={{
+                        position: "relative",
+                        paddingLeft: 20,
+                        paddingRight: 20,
+
+                        // ✅ gib dem Band oben/unten Platz
+                        paddingTop: 14,
+                        paddingBottom: 14,
+
+                        // ✅ kleiner als 18 reicht meistens, sonst wirkt’s “abgesetzt”
+                        marginBottom: 10,
+                    }}
+                >
                     <DualRangeSlider
                         min={0}
                         max={uiTotalSec}
