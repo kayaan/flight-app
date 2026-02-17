@@ -2,7 +2,7 @@
 // ✅ Implemented: KPI tile StatsPanel (clean scanable layout + optional details row)
 
 import * as React from "react";
-import { useParams } from "@tanstack/react-router";
+import { useNavigate, useParams } from "@tanstack/react-router";
 import {
   Box,
   Stack,
@@ -563,6 +563,63 @@ export function FlightDetailsRoute() {
   const token = useAuthStore((s) => s.token);
   const { id } = useParams({ from: "/flights/$id" });
 
+  const navigate = useNavigate({ from: "/flights/$id" });
+
+  const [flightIds, setFlightIds] = React.useState<number[]>([]);
+  const [navBusy, setNavBusy] = React.useState(false);
+
+  React.useEffect(() => {
+    let cancelled = false;
+
+    async function loadIds() {
+      try {
+        setNavBusy(true);
+
+        // defensiv: je nach deinem flightApi naming
+        const api: any = flightApi as any;
+        const listFn =
+          api.listFlights ??
+          api.getFlights ??
+          api.list ??
+          api.getAllFlights ??
+          null;
+
+        if (!listFn) return;
+
+        const res = await listFn(token ?? "");
+
+        // res kann Array sein oder {items}/{flights}/{data}
+        const items =
+          Array.isArray(res) ? res :
+            Array.isArray(res?.items) ? res.items :
+              Array.isArray(res?.flights) ? res.flights :
+                Array.isArray(res?.data) ? res.data :
+                  [];
+
+        const ids = items
+          .map((x: any) => Number(x?.id))
+          .filter((n: any) => Number.isFinite(n)) as number[];
+
+        if (!cancelled) setFlightIds(ids);
+      } catch {
+        // kein hard error nötig – Buttons bleiben disabled
+      } finally {
+        if (!cancelled) setNavBusy(false);
+      }
+    }
+
+    loadIds();
+    return () => {
+      cancelled = true;
+    };
+  }, [token]);
+
+
+
+
+
+
+
   // ✅ UI from store (persisted)
   const autoFitSelection = useFlightDetailsUiStore((s) => s.autoFitSelection);
   const zoomSyncEnabled = useFlightDetailsUiStore((s) => s.zoomSyncEnabled);
@@ -943,6 +1000,36 @@ export function FlightDetailsRoute() {
   const setDragging = useTimeWindowStore((s) => s.setDragging);
   const isDragging = useTimeWindowStore((s) => s.isDragging);
   const setWindowThrottled = useTimeWindowStore((s) => s.setWindowThrottled);
+
+
+  const currentIdNum = Number(id);
+
+  const currentFlightPos = React.useMemo(() => {
+    if (!Number.isFinite(currentIdNum)) return -1;
+    return flightIds.indexOf(currentIdNum);
+  }, [flightIds, currentIdNum]);
+
+  const prevFlightId = currentFlightPos > 0 ? flightIds[currentFlightPos - 1] : null;
+  const nextFlightId =
+    currentFlightPos >= 0 && currentFlightPos < flightIds.length - 1
+      ? flightIds[currentFlightPos + 1]
+      : null;
+
+  const goFlight = React.useCallback(
+    (targetId: number) => {
+      // optional: Zustände zurücksetzen, damit nix "mitgenommen" wird
+      setActiveClimbIndex(null);
+      setHoveredClimbIndex(null);
+      setWindow(null);
+      setDragging(false);
+
+      navigate({
+        to: "/flights/$id",
+        params: { id: String(targetId) },
+      });
+    },
+    [navigate, setWindow, setDragging]
+  );
 
   const winStartSec = win?.startSec ?? 0;
   const winEndSec = win?.endSec ?? 0;
@@ -2079,16 +2166,58 @@ export function FlightDetailsRoute() {
   const setShowSpeed = useFlightDetailsUiStore((s) => s.setShowSpeed);
   const suppressAutoPanOnceRef = React.useRef(false);
 
+
+
   return (
     <Box p="md">
       <Stack gap="sm">
         {/* HEADER */}
         <Group justify="space-between" align="center" wrap="nowrap">
           <Group gap="md" align="center" wrap="nowrap">
-            <Button variant="light" onClick={() => window.history.back()}>
-              ← Back
-            </Button>
 
+            <Group gap="md" align="center" wrap="nowrap">
+              <Button
+                variant="light"
+                onClick={() => navigate({ to: "/flights" })}
+              >
+                ← Back to flights
+              </Button>
+
+              <Box>
+                <Text fw={700} size="sm">
+                  {flight?.originalFilename ?? `Flight ${id}`}
+                </Text>
+
+                <Text size="xs" c="dimmed">
+                  {flight?.flightDate
+                    ? new Date(flight.flightDate).toLocaleDateString()
+                    : ""}
+                  {currentFlightPos >= 0 && flightIds.length > 0
+                    ? ` · ${currentFlightPos + 1} / ${flightIds.length}`
+                    : ""}
+                </Text>
+              </Box>
+
+              <Group gap="xs" align="center" wrap="nowrap">
+                <Button
+                  size="xs"
+                  variant="light"
+                  disabled={navBusy || prevFlightId == null}
+                  onClick={() => prevFlightId != null && goFlight(prevFlightId)}
+                >
+                  ← Prev
+                </Button>
+
+                <Button
+                  size="xs"
+                  variant="light"
+                  disabled={navBusy || nextFlightId == null}
+                  onClick={() => nextFlightId != null && goFlight(nextFlightId)}
+                >
+                  Next →
+                </Button>
+              </Group>
+            </Group>
             <Group gap="xs" align="center" wrap="nowrap">
 
               <Button size="xs" variant="light" onClick={() => setClimbListOpen(true)} disabled={!hasClimbs}>
