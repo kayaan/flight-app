@@ -2723,7 +2723,7 @@ export function FlightDetailsRoute() {
 
               <Box style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", gap: 10 }}>
                 {showAlt && (
-                  <Box style={{ flex: 1, minHeight: 140 }}>
+                  <Box style={{ flex: 1, minHeight: 140, display: "flex", flexDirection: "column", minHeight: 0 }}>
                     <Text size="sm" fw={600} mb={4}>
                       Altitude
                     </Text>
@@ -2745,7 +2745,7 @@ export function FlightDetailsRoute() {
                 )}
 
                 {showVario && (
-                  <Box style={{ flex: 1, minHeight: 140 }}>
+                  <Box style={{ flex: 1, minHeight: 140, display: "flex", flexDirection: "column", minHeight: 0 }}>
                     <Text size="sm" fw={600} mb={4}>
                       Vertical speed (Vario)
                     </Text>
@@ -2767,7 +2767,7 @@ export function FlightDetailsRoute() {
                 )}
 
                 {showSpeed && (
-                  <Box style={{ flex: 1, minHeight: 140 }}>
+                  <Box style={{ flex: 1, minHeight: 140, display: "flex", flexDirection: "column", minHeight: 0 }}>
                     <Text size="sm" fw={600} mb={4}>
                       Horizontal speed
                     </Text>
