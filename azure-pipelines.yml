@@ -58,20 +58,27 @@ stages:
       displayName: 'Download artifact'
       inputs:
         artifact: 'drop'
-        path: '$(Pipeline.Workspace)/drop'
+        path: '$(System.DefaultWorkingDirectory)/drop'
 
     - task: ExtractFiles@1
       displayName: 'Extract dist.zip'
       inputs:
-        archiveFilePatterns: '$(Pipeline.Workspace)/drop/dist.zip'
-        destinationFolder: '$(Pipeline.Workspace)/swa'
+        archiveFilePatterns: '$(System.DefaultWorkingDirectory)/drop/dist.zip'
+        destinationFolder: '$(System.DefaultWorkingDirectory)/swa'
         cleanDestinationFolder: true
 
+    # (optional aber sehr hilfreich zum Debuggen)
+    - script: |
+        echo "PWD=$(pwd)"
+        echo "Listing swa:"
+        ls -la "$(System.DefaultWorkingDirectory)/swa"
+      displayName: 'Debug: verify extracted files'
+
     - task: AzureStaticWebApp@0
-      displayName: 'Deploy to Azure Static Web App'
+      displayName: 'Deploy to Azure Static Web App (from artifact)'
       inputs:
         azure_static_web_apps_api_token: '$(SWA_DEPLOYMENT_TOKEN)'
-        app_location: '$(Pipeline.Workspace)/swa'
+        app_location: 'swa'
         api_location: ''
         output_location: '.'
         skip_app_build: true
