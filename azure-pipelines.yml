@@ -9,29 +9,69 @@ trigger:
 pool:
   vmImage: ubuntu-latest
 
-steps:
-- task: NodeTool@0
-  inputs:
-    versionSpec: '20.x'
-  displayName: 'Install Node.js'
+variables:
+- group: Variables
 
-- script: |
-    npm install
-    npm run build
-  displayName: 'npm install and build'
+stages:
+# -------------------------
+# 1) BUILD STAGE
+# -------------------------
+- stage: Build
+  jobs:
+  - job: BuildJob
+    steps:
+    - task: NodeTool@0
+      inputs:
+        versionSpec: '20.x'
+      displayName: 'Install Node.js'
 
-- task: ArchiveFiles@2
-  displayName: 'Archive dist'
-  inputs:
-    rootFolderOrFile: 'dist'
-    includeRootFolder: false
-    archiveType: 'zip'
-    archiveFile: '$(Build.ArtifactStagingDirectory)/dist.zip'
-    replaceExistingArchive: true
+    - script: |
+        npm ci
+        npm run build
+      displayName: 'npm install and build'
 
-- task: PublishPipelineArtifact@1
-  displayName: 'Publish dist.zip as artifact'
-  inputs:
-    targetPath: '$(Build.ArtifactStagingDirectory)/dist.zip'
-    artifact: 'drop'
-    publishLocation: 'pipeline'
+    - task: ArchiveFiles@2
+      displayName: 'Archive dist'
+      inputs:
+        rootFolderOrFile: 'dist'
+        includeRootFolder: false
+        archiveType: 'zip'
+        archiveFile: '$(Build.ArtifactStagingDirectory)/dist.zip'
+        replaceExistingArchive: true
+
+    - task: PublishPipelineArtifact@1
+      displayName: 'Publish dist.zip as artifact'
+      inputs:
+        targetPath: '$(Build.ArtifactStagingDirectory)/dist.zip'
+        artifact: 'drop'
+        publishLocation: 'pipeline'
+
+# -------------------------
+# 2) DEPLOY STAGE
+# -------------------------
+- stage: Deploy
+  dependsOn: Build
+  jobs:
+  - job: DeployJob
+    steps:
+    - task: DownloadPipelineArtifact@2
+      displayName: 'Download artifact'
+      inputs:
+        artifact: 'drop'
+        path: '$(Pipeline.Workspace)/drop'
+
+    - task: ExtractFiles@1
+      displayName: 'Extract dist.zip'
+      inputs:
+        archiveFilePatterns: '$(Pipeline.Workspace)/drop/dist.zip'
+        destinationFolder: '$(Pipeline.Workspace)/swa'
+        cleanDestinationFolder: true
+
+    - task: AzureStaticWebApp@0
+      displayName: 'Deploy to Azure Static Web App'
+      inputs:
+        azure_static_web_apps_api_token: '$(SWA_DEPLOYMENT_TOKEN)'
+        app_location: '$(Pipeline.Workspace)/swa'
+        api_location: ''
+        output_location: '.'
+        skip_app_build: true
