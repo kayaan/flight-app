@@ -80,7 +80,7 @@ const DEFAULTS = {
 
 export const useFlightDetailsUiStore = create<FlightDetailsUiState>()(
     persist(
-        (set, get) => ({
+        (set) => ({
             ...DEFAULTS,
 
             setAutoFitSelection: (v) => set({ autoFitSelection: !!v }),
@@ -137,7 +137,7 @@ export const useFlightDetailsUiStore = create<FlightDetailsUiState>()(
                 showClimbLinesOnChart: s.showClimbLinesOnChart,
                 showThermalsOnMap: s.showThermalsOnMap,
             }),
-            migrate: (persisted: any, version) => {
+            migrate: (persisted: any) => {
                 // future-proof: if you bump version, normalize missing fields
                 if (!persisted || typeof persisted !== "object") return { ...DEFAULTS };
 

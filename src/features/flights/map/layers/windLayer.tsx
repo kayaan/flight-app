@@ -85,7 +85,7 @@ export function WindLayer(props: WindLayerProps) {
             pane.style.pointerEvents = "auto";
         }
 
-        const g = L.layerGroup({ pane: paneName });
+        const g = L.layerGroup({ pane: paneName } as any);
         g.addTo(map);
         layerRef.current = g;
 

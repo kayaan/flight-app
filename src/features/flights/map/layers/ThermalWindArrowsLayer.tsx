@@ -28,17 +28,6 @@ function toRad(d: number) {
     return (d * Math.PI) / 180;
 }
 
-// local meters around ref
-function projectLocalMeters(lat: number, lon: number, refLat: number, refLon: number) {
-    const R = 6371000;
-    const φ = toRad(lat);
-    const φ0 = toRad(refLat);
-    const dφ = φ - φ0;
-    const dλ = toRad(lon - refLon);
-    const x = dλ * Math.cos(φ0) * R; // east
-    const y = dφ * R;               // north
-    return { x, y };
-}
 function unprojectLocalMeters(x: number, y: number, refLat: number, refLon: number) {
     const R = 6371000;
     const φ0 = toRad(refLat);
