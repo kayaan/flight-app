@@ -26,9 +26,24 @@ stages:
       displayName: 'Install Node.js'
 
     - script: |
+        set -e
+
+        BASE_VERSION=$(node -p "require('./package.json').version")
+        MAJOR_MINOR=$(echo $BASE_VERSION | cut -d. -f1,2)
+        PATCH=$(Build.BuildId)
+
+        FULL_VERSION="$MAJOR_MINOR.$PATCH"
+
+        SHORT_SHA=$(echo "$(Build.SourceVersion)" | cut -c1-7)
+
+        echo "FULL_VERSION=$FULL_VERSION"
+
         npm ci
+        VITE_APP_VERSION="$FULL_VERSION" \
+        VITE_BUILD_ID="$(Build.BuildNumber)" \
+        VITE_GIT_SHA="$SHORT_SHA" \
         npm run build
-      displayName: 'npm install and build'
+      displayName: 'Build with dynamic patch version'
 
     - task: ArchiveFiles@2
       displayName: 'Archive dist'

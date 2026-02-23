@@ -9,6 +9,8 @@ import { MantineProvider } from '@mantine/core'
 import { ModalsProvider } from '@mantine/modals'
 import "leaflet/dist/leaflet.css";
 
+import { APP_VERSION, BUILD_ID } from "./appVersion";
+
 const router = createRouter({ routeTree })
 
 declare module '@tanstack/react-router' {
@@ -27,6 +29,8 @@ const updateSW = registerSW({
     console.log("App ready to work offline.");
   },
 });
+
+document.title = `Fly App v${APP_VERSION} (${BUILD_ID})`;
 
 createRoot(document.getElementById('root')!).render(
   // <StrictMode>
