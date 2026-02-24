@@ -100,7 +100,7 @@ stages:
 # 3) DEPLOY TEST
 # -------------------------
 - stage: DeployTest
-  dependsOn: DeployDev
+  dependsOn: Build
   jobs:
   - deployment: DeployTestJob
     environment: test
@@ -134,7 +134,7 @@ stages:
 # 4) DEPLOY PROD
 # -------------------------
 - stage: DeployProd
-  dependsOn: DeployTest
+  dependsOn: Build
   jobs:
   - deployment: DeployProdJob
     environment: production
