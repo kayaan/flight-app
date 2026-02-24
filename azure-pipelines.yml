@@ -62,104 +62,20 @@ stages:
         artifact: 'drop'
         publishLocation: 'pipeline'
 
-# -------------------------
-# 2) DEPLOY DEV
-# -------------------------
-- stage: DeployDev
-  dependsOn: Build
-  jobs:
-  - deployment: DeployDevJob
-    environment: dev
-    strategy:
-      runOnce:
-        deploy:
-          steps:
-          - task: DownloadPipelineArtifact@2
-            displayName: 'Download artifact'
-            inputs:
-              artifact: 'drop'
-              path: '$(System.DefaultWorkingDirectory)/drop'
+- template: pipelines/deploy-swa.yml
+  parameters:
+    stageName: DeployDev
+    environmentName: dev
+    tokenVariable: SWA_DEPLOYMENT_TOKEN
 
-          - task: ExtractFiles@1
-            displayName: 'Extract dist.zip'
-            inputs:
-              archiveFilePatterns: '$(System.DefaultWorkingDirectory)/drop/dist.zip'
-              destinationFolder: '$(System.DefaultWorkingDirectory)/swa'
-              cleanDestinationFolder: true
+- template: pipelines/deploy-swa.yml
+  parameters:
+    stageName: DeployTest
+    environmentName: test
+    tokenVariable: SWA_DEPLOYMENT_TOKEN_TEST
 
-          - task: AzureStaticWebApp@0
-            displayName: 'Deploy to Azure Static Web App (DEV)'
-            inputs:
-              azure_static_web_apps_api_token: '$(SWA_DEPLOYMENT_TOKEN)'
-              app_location: 'swa'
-              api_location: ''
-              output_location: '.'
-              skip_app_build: true
-
-# -------------------------
-# 3) DEPLOY TEST
-# -------------------------
-- stage: DeployTest
-  dependsOn: Build
-  jobs:
-  - deployment: DeployTestJob
-    environment: test
-    strategy:
-      runOnce:
-        deploy:
-          steps:
-          - task: DownloadPipelineArtifact@2
-            displayName: 'Download artifact'
-            inputs:
-              artifact: 'drop'
-              path: '$(System.DefaultWorkingDirectory)/drop'
-
-          - task: ExtractFiles@1
-            displayName: 'Extract dist.zip'
-            inputs:
-              archiveFilePatterns: '$(System.DefaultWorkingDirectory)/drop/dist.zip'
-              destinationFolder: '$(System.DefaultWorkingDirectory)/swa'
-              cleanDestinationFolder: true
-
-          - task: AzureStaticWebApp@0
-            displayName: 'Deploy to Azure Static Web App (TEST)'
-            inputs:
-              azure_static_web_apps_api_token: '$(SWA_DEPLOYMENT_TOKEN_TEST)'
-              app_location: 'swa'
-              api_location: ''
-              output_location: '.'
-              skip_app_build: true
-
-# -------------------------
-# 4) DEPLOY PROD
-# -------------------------
-- stage: DeployProd
-  dependsOn: Build
-  jobs:
-  - deployment: DeployProdJob
-    environment: production
-    strategy:
-      runOnce:
-        deploy:
-          steps:
-          - task: DownloadPipelineArtifact@2
-            displayName: 'Download artifact'
-            inputs:
-              artifact: 'drop'
-              path: '$(System.DefaultWorkingDirectory)/drop'
-
-          - task: ExtractFiles@1
-            displayName: 'Extract dist.zip'
-            inputs:
-              archiveFilePatterns: '$(System.DefaultWorkingDirectory)/drop/dist.zip'
-              destinationFolder: '$(System.DefaultWorkingDirectory)/swa'
-              cleanDestinationFolder: true
-
-          - task: AzureStaticWebApp@0
-            displayName: 'Deploy to Azure Static Web App (PROD)'
-            inputs:
-              azure_static_web_apps_api_token: '$(SWA_DEPLOYMENT_TOKEN_PROD)'
-              app_location: 'swa'
-              api_location: ''
-              output_location: '.'
-              skip_app_build: true
+- template: pipelines/deploy-swa.yml
+  parameters:
+    stageName: DeployProd
+    environmentName: production
+    tokenVariable: SWA_DEPLOYMENT_TOKEN_PROD

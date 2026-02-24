@@ -1,0 +1,36 @@
+parameters:
+  stageName: ''
+  environmentName: ''
+  tokenVariable: ''   # name of the variable that holds the SWA token (e.g. SWA_DEPLOYMENT_TOKEN_DEV)
+
+stages:
+- stage: ${{ parameters.stageName }}
+  dependsOn: Build
+  jobs:
+  - deployment: DeployJob
+    environment: ${{ parameters.environmentName }}
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - task: DownloadPipelineArtifact@2
+            displayName: 'Download artifact'
+            inputs:
+              artifact: 'drop'
+              path: '$(System.DefaultWorkingDirectory)/drop'
+
+          - task: ExtractFiles@1
+            displayName: 'Extract dist.zip'
+            inputs:
+              archiveFilePatterns: '$(System.DefaultWorkingDirectory)/drop/dist.zip'
+              destinationFolder: '$(System.DefaultWorkingDirectory)/swa'
+              cleanDestinationFolder: true
+
+          - task: AzureStaticWebApp@0
+            displayName: 'Deploy to Azure Static Web App'
+            inputs:
+              azure_static_web_apps_api_token: $(${{ parameters.tokenVariable }})
+              app_location: 'swa'
+              api_location: ''
+              output_location: '.'
+              skip_app_build: true
