@@ -90,7 +90,7 @@ stages:
           - task: AzureStaticWebApp@0
             displayName: 'Deploy to Azure Static Web App (DEV)'
             inputs:
-              azure_static_web_apps_api_token: '$(SWA_DEPLOYMENT_TOKEN_DEV)'
+              azure_static_web_apps_api_token: '$(SWA_DEPLOYMENT_TOKEN)'
               app_location: 'swa'
               api_location: ''
               output_location: '.'
