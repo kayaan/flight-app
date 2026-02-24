@@ -2166,8 +2166,6 @@ export function FlightDetailsRoute() {
   const setShowSpeed = useFlightDetailsUiStore((s) => s.setShowSpeed);
   const suppressAutoPanOnceRef = React.useRef(false);
 
-
-
   return (
     <Box p="md">
       <Stack gap="sm">

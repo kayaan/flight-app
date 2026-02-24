@@ -146,7 +146,7 @@ export function FlightsPage() {
     const actionsDisabled = busy;
 
     return (
-        <Box h="100vh">
+        <Box h="100vh" p="md">
             <Stack gap="md">
                 <LoadingOverlay
                     visible={busy}
