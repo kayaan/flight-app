@@ -1,5 +1,5 @@
 // src/features/flights/FlightDetailsRoute.tsx
-// ✅ Implemented: KPI tile StatsPanel (clean scanable layout + optional details row)
+// ✅ Route is now mostly UI; logic moved to useFlightDetailsModel()
 
 import * as React from "react";
 import { useNavigate, useParams } from "@tanstack/react-router";
@@ -24,178 +24,131 @@ import { IconAlertCircle, IconSettings } from "@tabler/icons-react";
 import EChartsReact from "echarts-for-react";
 import * as echarts from "echarts";
 
-import type { FlightRecordDetails } from "./flights.types";
-import { buildFlightSeries, calculationWindow, parseIgcFixes } from "./igc/igc.series";
 import { useAuthStore } from "../auth/store/auth.store";
-import { flightApi } from "./flights.api";
-import type { FixPoint } from "./igc";
-
 import { FlightMap } from "./map/FlightMapBase";
-import { useFlightHoverStore } from "./store/flightHover.store";
-import { useTimeWindowStore } from "./store/timeWindow.store";
-import { detectClimbPhases } from "./analysis/turns/detectClimbPhases";
-import { useFlightDetailsUiStore, type BaseMap as UiBaseMap } from "./store/flightDetailsUi.store";
-import { detectThermalCirclesInClimbs, type ThermalCircle } from "./analysis/turns/detectThermalCircles";
+import { fmtSigned, fmtTime } from "./flightDetails.engine";
 
-// ✅ NEW: import pure helpers/engines
-import {
-  ALT_AXIS_POINTER,
-  ALT_DATAZOOM,
-  ALT_GRID,
-  SPEED_DATAZOOM,
-  VARIO_DATAZOOM,
-  buildActiveRangeMarkLine,
-  buildClimbLinesSeries,
-  buildWindowMarkLine,
-  calculateSmoothedSpeedFromSeries,
-  calculateVarioFromSeries,
-  clamp,
-  colorForClimbIndex,
-  computeSegmentStats,
-  extractTSec,
-  fmtSigned,
-  fmtTime,
-  type AxisPointerLabelParams,
-  type ChartKind,
-} from "./flightDetails.engine";
+import { useFlightDetailsModel } from "./useFlightDetailsModel";
+import type { BaseMap as UiBaseMap } from "./store/flightDetailsUi.store";
 
-const EMPTY_FIXES: FixPoint[] = [];
-const EMPTY_THERMALS: ThermalCircle[] = [];
+import { FlightStatsPanel } from "./FlightStatsPanel";
 
 export function FlightDetailsRoute() {
   const token = useAuthStore((s) => s.token);
   const { id } = useParams({ from: "/flights/$id" });
-
   const navigate = useNavigate({ from: "/flights/$id" });
 
-  const [flightIds, setFlightIds] = React.useState<number[]>([]);
-  const [navBusy, setNavBusy] = React.useState(false);
+  // UI-only states (Drawer open/close)
+  const [settingsOpen, setSettingsOpen] = React.useState(false);
+  const [climbListOpen, setClimbListOpen] = React.useState(false);
 
-  React.useEffect(() => {
-    let cancelled = false;
+  const model = useFlightDetailsModel({
+    id,
+    token,
+    goToFlight: (targetId) => {
+      navigate({ to: "/flights/$id", params: { id: String(targetId) } });
+    },
+  });
 
-    async function loadIds() {
-      try {
-        setNavBusy(true);
+  const {
+    flight,
+    busy,
+    error,
+    computed,
+    chartData,
 
-        // defensiv: je nach deinem flightApi naming
-        const api: any = flightApi as any;
-        const listFn =
-          api.listFlights ??
-          api.getFlights ??
-          api.list ??
-          api.getAllFlights ??
-          null;
+    // nav
+    flightIds,
+    navBusy,
+    currentFlightPos,
+    prevFlightId,
+    nextFlightId,
+    goFlight,
 
-        if (!listFn) return;
+    // climbs
+    climbs,
+    sortedClimbs,
+    climbSortMode,
+    setClimbSortMode,
+    hasClimbs,
+    climbNavActive,
+    activeClimbIndex,
+    setActiveClimbIndex,
+    prevClimb,
+    nextClimb,
+    clearActiveClimb,
+    hoveredClimbIndex,
+    setHoveredClimbIndex,
 
-        const res = await listFn(token ?? "");
+    // thermals/stats
+    thermalCount,
+    activeClimb,
+    activeClimbGainM,
+    activeClimbDurSec,
+    suppressAutoPanOnceRef,
 
-        // res kann Array sein oder {items}/{flights}/{data}
-        const items =
-          Array.isArray(res) ? res :
-            Array.isArray(res?.items) ? res.items :
-              Array.isArray(res?.flights) ? res.flights :
-                Array.isArray(res?.data) ? res.data :
-                  [];
+    win,
+    winStartSec,
+    winEndSec,
+    winTotalSec,
+    segmentStats,
+    statsSource,
+    statsRange,
 
-        const ids = items
-          .map((x: any) => Number(x?.id))
-          .filter((n: any) => Number.isFinite(n)) as number[];
+    // ui store values/actions
+    autoFitSelection,
+    setAutoFitSelectionUi,
+    zoomSyncEnabled,
+    setZoomSyncEnabled,
+    syncEnabled,
+    setSyncEnabled,
+    followEnabled,
+    setFollowEnabled,
+    showStats,
+    setShowStats,
 
-        if (!cancelled) setFlightIds(ids);
-      } catch {
-        // kein hard error nötig – Buttons bleiben disabled
-      } finally {
-        if (!cancelled) setNavBusy(false);
-      }
-    }
+    showAlt,
+    showVario,
+    showSpeed,
+    setShowAlt,
+    setShowVario,
+    setShowSpeed,
 
-    loadIds();
-    return () => {
-      cancelled = true;
-    };
-  }, [token]);
+    varioWindowSec,
+    setVarioWindowSec,
+    baseMap,
+    setBaseMap,
 
+    showClimbLinesOnChart,
+    setShowClimbLinesOnChart,
+    showThermalsOnMap,
+    setShowThermalsOnMap,
 
-  // ✅ UI from store (persisted)
-  const autoFitSelection = useFlightDetailsUiStore((s) => s.autoFitSelection);
-  const zoomSyncEnabled = useFlightDetailsUiStore((s) => s.zoomSyncEnabled);
-  const syncEnabled = useFlightDetailsUiStore((s) => s.syncEnabled);
-  const followEnabled = useFlightDetailsUiStore((s) => s.followEnabled);
-  const showStats = useFlightDetailsUiStore((s) => s.showStats);
+    // charts
+    chartEvents,
+    altOption,
+    varioOption,
+    speedOption,
+    makeOnChartReady,
 
-  const showAlt = useFlightDetailsUiStore((s) => s.showAlt);
-  const showVario = useFlightDetailsUiStore((s) => s.showVario);
-  const showSpeed = useFlightDetailsUiStore((s) => s.showSpeed);
+    // zoom actions
+    zoomDisabled,
+    zoomChartsToWindow,
+    resetSelection,
 
-  const varioWindowSec = useFlightDetailsUiStore((s) => s.varioWindowSec);
-  const baseMap = useFlightDetailsUiStore((s) => s.baseMap);
+    // map
+    mapFixesFull,
+    mapFixesLite,
+    mapThermals,
+    mapFocusKey,
+    pulseActive,
+    focusActiveClimb,
+  } = model;
 
-  const setAutoFitSelectionUi = useFlightDetailsUiStore((s) => s.setAutoFitSelection);
-  const setZoomSyncEnabled = useFlightDetailsUiStore((s) => s.setZoomSyncEnabled);
-  const setSyncEnabled = useFlightDetailsUiStore((s) => s.setSyncEnabled);
-  const setFollowEnabled = useFlightDetailsUiStore((s) => s.setFollowEnabled);
-  const setShowStats = useFlightDetailsUiStore((s) => s.setShowStats);
-
-
-  const setVarioWindowSec = useFlightDetailsUiStore((s) => s.setVarioWindowSec);
-  const setBaseMap = useFlightDetailsUiStore((s) => s.setBaseMap);
-
-  // keep TimeWindow-store synced (AutoFit logic lives there)
-  const setAutoFitSelectionInWindowStore = useTimeWindowStore((s) => s.setAutoFitSelection);
-  React.useEffect(() => {
-    setAutoFitSelectionInWindowStore(autoFitSelection);
-  }, [autoFitSelection, setAutoFitSelectionInWindowStore]);
-
-  const setHoverTSecThrottled = useFlightHoverStore((s) => s.setHoverTSecThrottled);
-  const clearNow = useFlightHoverStore((s) => s.clearNow);
-
-  const chartEvents = React.useMemo(() => {
-    return {
-      mousemove: (params: any) => {
-        const t = extractTSec(params);
-        if (t != null) setHoverTSecThrottled(t);
-      },
-      updateAxisPointer: (e: any) => {
-        const ax = e?.axesInfo?.[0];
-        const t = ax?.value;
-        if (typeof t === "number" && Number.isFinite(t)) setHoverTSecThrottled(t);
-      },
-      globalout: () => {
-        clearNow();
-      },
-    } as const;
-  }, [setHoverTSecThrottled, clearNow]);
-
-  const [flight, setFlight] = React.useState<FlightRecordDetails | null>(null);
-  const [busy, setBusy] = React.useState(false);
-  const [error, setError] = React.useState<string | null>(null);
-
-  const [windowSec] = React.useState(calculationWindow);
-
-  const chartGroupId = React.useMemo(() => `flight-${id}-charts`, [id]);
-
-  const altInstRef = React.useRef<any>(null);
-  const varioInstRef = React.useRef<any>(null);
-  const speedInstRef = React.useRef<any>(null);
-  const [chartsReadyTick, setChartsReadyTick] = React.useState(0);
-
+  // local UI layout state (kept in route)
   const containerRef = React.useRef<HTMLDivElement | null>(null);
   const draggingRef = React.useRef(false);
   const [splitPct, setSplitPct] = React.useState<number>(60);
-
-  const showClimbLinesOnChart = useFlightDetailsUiStore((s) => s.showClimbLinesOnChart);
-  const showThermalsOnMap = useFlightDetailsUiStore((s) => s.showThermalsOnMap);
-
-  const setShowClimbLinesOnChart = useFlightDetailsUiStore((s) => s.setShowClimbLinesOnChart);
-  const setShowThermalsOnMap = useFlightDetailsUiStore((s) => s.setShowThermalsOnMap);
-
-  const [chartReady, setChartReady] = React.useState({
-    alt: false,
-    vario: false,
-    speed: false,
-  });
 
   const stopDragging = React.useCallback(() => {
     draggingRef.current = false;
@@ -217,7 +170,9 @@ export function FlightDetailsRoute() {
     const x = clientX - rect.left;
     const pct = (x / rect.width) * 100;
 
-    setSplitPct(clamp(pct, 40, 75));
+    // clamp locally
+    const clamped = Math.max(40, Math.min(pct, 75));
+    setSplitPct(clamped);
   }, []);
 
   React.useEffect(() => {
@@ -239,1459 +194,14 @@ export function FlightDetailsRoute() {
     };
   }, [onDividerPointerMove, stopDragging]);
 
-  React.useEffect(() => {
-    let cancelled = false;
-
-    async function run() {
-      setBusy(true);
-      setError(null);
-      setFlight(null);
-
-      try {
-        const numericId = Number(id);
-        if (!Number.isFinite(numericId)) throw new Error("Invalid flight id");
-
-        const f = await flightApi.getFlightById(numericId, token ?? "");
-        if (!cancelled) setFlight(f);
-      } catch (e: any) {
-        if (!cancelled) setError(e?.message ?? "Failed to load flight");
-      } finally {
-        if (!cancelled) setBusy(false);
-      }
-    }
-
-    run();
-    return () => {
-      cancelled = true;
-    };
-  }, [id, token]);
-
-  const fixesFull = React.useMemo(() => {
-    if (!flight?.igcContent || !flight.flightDate) return null;
-    return parseIgcFixes(flight.igcContent, flight.flightDate);
-  }, [flight]);
-
-  const computed = React.useMemo(() => {
-    if (!fixesFull) return null;
-
-    const { series } = buildFlightSeries(fixesFull, windowSec);
-
-    const t0 = fixesFull[0]?.tSec ?? 0;
-    const fixesFullRel: FixPoint[] = fixesFull.map((f) => ({
-      tSec: f.tSec - t0,
-      lat: f.lat,
-      iso: f.iso,
-      lon: f.lon,
-      altitudeM: f.altitudeM,
-    }));
-
-    return { series, fixesFull: fixesFullRel };
-  }, [fixesFull, windowSec]);
-
-  const climbs = React.useMemo(() => {
-    const f = computed?.fixesFull ?? null;
-    if (!f) return [];
-    const climbPhases = detectClimbPhases(f, {
-      startGainM: 15,
-      minGainM: 100,
-      dropPct: 0.3,
-      minDropAbsM: 75,
-      minLenPts: 25,
-    });
-
-    return climbPhases;
-  }, [computed?.fixesFull]);
-
-  const [activeClimbIndex, setActiveClimbIndex] = React.useState<number | null>(null);
-
-  const hasClimbs = climbs.length > 0;
-  const climbNavActive = activeClimbIndex != null && hasClimbs;
-
-  const [settingsOpen, setSettingsOpen] = React.useState(false);
-  const [mapFocusKey, setMapFocusKey] = React.useState(0);
-  const [pulseActive, setPulseActive] = React.useState(false);
-
-  // kleine UX-Pulse helper
-  const pulse = React.useCallback(() => {
-    setPulseActive(true);
-    window.setTimeout(() => setPulseActive(false), 260);
-  }, []);
-
-  const clearActiveClimb = React.useCallback(() => {
-    setActiveClimbIndex(null);
-  }, []);
-
-  const prevClimb = React.useCallback(() => {
-    if (!hasClimbs) return;
-    setActiveClimbIndex((prev) => {
-      if (prev == null) return climbs.length - 1; // wenn nix aktiv: spring ans Ende
-      return (prev - 1 + climbs.length) % climbs.length;
-    });
-  }, [hasClimbs, climbs.length]);
-
-  const nextClimb = React.useCallback(() => {
-    if (!hasClimbs) return;
-    setActiveClimbIndex((prev) => {
-      if (prev == null) return 0; // wenn nix aktiv: starte bei 0
-      return (prev + 1) % climbs.length;
-    });
-  }, [hasClimbs, climbs.length]);
-
-
-  React.useEffect(() => {
-    if (!climbs.length) {
-      setActiveClimbIndex(null);
-      return;
-    }
-    setActiveClimbIndex((prev) => {
-      if (prev == null) return prev;
-      return clamp(prev, 0, climbs.length - 1);
-    });
-  }, [climbs.length]);
-
-  const thermals = React.useMemo(() => {
-    const f = computed?.fixesFull ?? null;
-    if (!f) return [];
-    if (!climbs.length) return [];
-
-    return detectThermalCirclesInClimbs(f, climbs, {
-      windowPts: 40,
-      stepPts: 6,
-      minTurnDeg: 270,
-      minRadiusM: 20,
-      maxRadiusM: 160,
-      maxRadiusSlackM: 90,
-      maxRadiusRelStd: 0.5,
-      minSignConsistency: 0.45,
-      minAltGainM: 8,
-      mergeGapPts: 12,
-      backtrackPts: 8,
-    });
-  }, [computed?.fixesFull, climbs]);
-
-  const climbMarkLineData = React.useMemo(() => {
-    const f = computed?.fixesFull;
-    if (!f || !climbs.length) return [];
-
-    const data: any[] = [];
-
-    for (let i = 0; i < climbs.length; i++) {
-      const c = climbs[i];
-
-      const startSec = f[c.startIdx]?.tSec;
-      const endSec = f[c.endIdx]?.tSec;
-      if (!Number.isFinite(startSec) || !Number.isFinite(endSec)) continue;
-
-      const color = colorForClimbIndex(i);
-
-      data.push({
-        xAxis: startSec,
-        lineStyle: { color, width: 2, opacity: 0.9 },
-        label: { show: false },
-      });
-
-      data.push({
-        xAxis: endSec,
-        lineStyle: { color, width: 2, opacity: 0.9 },
-        label: { show: false },
-      });
-    }
-
-    return data;
-  }, [computed?.fixesFull, climbs]);
-
-  const [fixesLite, setFixesLite] = React.useState<FixPoint[] | null>(null);
-  const rdpJobRef = React.useRef(0);
-
-  React.useEffect(() => {
-    const full = computed?.fixesFull;
-    if (!full || full.length < 2) {
-      setFixesLite(null);
-      return;
-    }
-
-    setFixesLite(full);
-
-    const RDP_MIN_POINTS = 1000;
-    const RDP_EPS_METERS = 20;
-
-    if (full.length < RDP_MIN_POINTS) return;
-
-    const jobId = ++rdpJobRef.current;
-
-    const worker = new Worker(new URL("./map/rdp.worker.ts", import.meta.url), { type: "module" });
-
-    worker.onmessage = (ev: MessageEvent<{ jobId: number; fixesLite: FixPoint[] }>) => {
-      if (ev.data?.jobId !== jobId) return;
-      setFixesLite(ev.data.fixesLite);
-      worker.terminate();
-    };
-
-    worker.onerror = () => {
-      worker.terminate();
-    };
-
-    worker.postMessage({
-      jobId,
-      fixes: full,
-      epsilonMeters: RDP_EPS_METERS,
-      minPointsNoRdp: RDP_MIN_POINTS,
-    });
-
-    return () => {
-      worker.terminate();
-    };
-  }, [computed?.fixesFull]);
-
-  const computedWithLite = React.useMemo(() => {
-    if (!computed) return null;
-    return {
-      ...computed,
-      fixesLite: fixesLite ?? computed.fixesFull,
-    };
-  }, [computed, fixesLite]);
-
-  const chartData = React.useMemo(() => {
-    if (!computed) return null;
-
-    const alt = computed.series.map((p) => [p.tSec, p.altitudeM] as [number, number]);
-    const hSpeed = calculateSmoothedSpeedFromSeries(computed.series, 4);
-    const vSpeed = calculateVarioFromSeries(computed.series, varioWindowSec);
-
-    const maxT = computed.series.length ? computed.series[computed.series.length - 1].tSec : 0;
-
-    const altValues = alt.map((p) => p[1]);
-    const altMin = Math.min(...altValues);
-    const altMax = Math.max(...altValues);
-
-    const vVals = vSpeed.map((p) => p[1]);
-    const vAbsMax = Math.max(1, ...vVals.map((v) => Math.abs(v)));
-    const vMax = Math.ceil(vAbsMax * 1.1 * 2) / 2;
-    const vMin = -vMax;
-
-    return { alt, hSpeed, vSpeed, maxT, altMin, altMax, vMin, vMax };
-  }, [computed, varioWindowSec]);
-
-  const baseOption = React.useMemo(() => {
-    return {
-      animation: false,
-      tooltip: {
-        trigger: "axis",
-        axisPointer: { type: "cross" },
-      },
-      axisPointer: {
-        snap: true,
-        link: [{ xAxisIndex: "all" }],
-      },
-    };
-  }, []);
-
-  const altitudeTooltipFormatter = (params: any[]) => {
-    const y = params?.[0]?.value?.[1];
-    const h = typeof y === "number" ? y : Number(y);
-    if (!Number.isFinite(h)) return "";
-    return `<strong>${Math.round(h)} m</strong>`;
-  };
-
-  const win = useTimeWindowStore((s) => s.window);
-  const setWindow = useTimeWindowStore((s) => s.setWindow);
-  const setDragging = useTimeWindowStore((s) => s.setDragging);
-  const isDragging = useTimeWindowStore((s) => s.isDragging);
-  const setWindowThrottled = useTimeWindowStore((s) => s.setWindowThrottled);
-
-
-  const currentIdNum = Number(id);
-
-  const currentFlightPos = React.useMemo(() => {
-    if (!Number.isFinite(currentIdNum)) return -1;
-    return flightIds.indexOf(currentIdNum);
-  }, [flightIds, currentIdNum]);
-
-  const prevFlightId = currentFlightPos > 0 ? flightIds[currentFlightPos - 1] : null;
-  const nextFlightId =
-    currentFlightPos >= 0 && currentFlightPos < flightIds.length - 1
-      ? flightIds[currentFlightPos + 1]
-      : null;
-
-  const goFlight = React.useCallback(
-    (targetId: number) => {
-      // optional: Zustände zurücksetzen, damit nix "mitgenommen" wird
-      setActiveClimbIndex(null);
-      setHoveredClimbIndex(null);
-      setWindow(null);
-      setDragging(false);
-
-      navigate({
-        to: "/flights/$id",
-        params: { id: String(targetId) },
-      });
-    },
-    [navigate, setWindow, setDragging]
-  );
-
-  const winStartSec = win?.startSec ?? 0;
-  const winEndSec = win?.endSec ?? 0;
-  const winTotalSec = win?.totalSec ?? (chartData?.maxT ?? 0);
-
-  const activeClimb = React.useMemo(() => {
-    if (activeClimbIndex == null) return null;
-    if (!climbs.length) return null;
-    const i = clamp(activeClimbIndex, 0, climbs.length - 1);
-    return climbs[i] ?? null;
-  }, [activeClimbIndex, climbs]);
-
-  const thermalCount = thermals?.length ?? 0;
-
-  const activeClimbGainM = React.useMemo(() => {
-    if (!activeClimb) return null;
-    return Number.isFinite(activeClimb.gainM) ? activeClimb.gainM : null;
-  }, [activeClimb]);
-
-  const activeClimbDurSec = React.useMemo(() => {
-    if (!activeClimb || !computed?.fixesFull?.length) return null;
-    const f = computed.fixesFull;
-    const s = f[activeClimb.startIdx]?.tSec;
-    const e = f[activeClimb.endIdx]?.tSec;
-    if (!Number.isFinite(s) || !Number.isFinite(e)) return null;
-    return Math.max(0, Math.abs((e as number) - (s as number)));
-  }, [activeClimb, computed?.fixesFull]);
-
-  const activeClimbOverlay = React.useMemo(() => {
-    const f = computed?.fixesFull ?? null;
-    if (!activeClimb || !f) return null;
-
-    const s = f[activeClimb.startIdx]?.tSec;
-    const e = f[activeClimb.endIdx]?.tSec;
-    if (!Number.isFinite(s) || !Number.isFinite(e)) return null;
-
-    const a = Math.min(s as number, e as number);
-    const b = Math.max(s as number, e as number);
-
-    return {
-      startSec: a,
-      endSec: b,
-    };
-  }, [computed?.fixesFull, activeClimb]);
-
-  const activeRange = React.useMemo(() => {
-    if (!activeClimb || !computed?.fixesFull?.length) return null;
-
-    const f = computed.fixesFull;
-
-    const s = f[activeClimb.startIdx]?.tSec;
-    const e = f[activeClimb.endIdx]?.tSec;
-
-    if (!Number.isFinite(s) || !Number.isFinite(e)) return null;
-
-    return { startSec: s as number, endSec: e as number };
-  }, [activeClimb, computed?.fixesFull]);
-
-  const statsSource = activeClimb ? ("climb" as const) : ("window" as const);
-
-  const statsRange = React.useMemo(() => {
-    const f = computed?.fixesFull ?? null;
-    if (activeClimb && f) {
-      const s = f[activeClimb.startIdx]?.tSec;
-      const e = f[activeClimb.endIdx]?.tSec;
-      if (Number.isFinite(s) && Number.isFinite(e)) {
-        return { startSec: s as number, endSec: e as number };
-      }
-    }
-    return { startSec: winStartSec, endSec: winEndSec };
-  }, [computed?.fixesFull, activeClimb, winStartSec, winEndSec]);
-
-  const windowMarkLine = React.useMemo(() => {
-    if (!win) return undefined;
-    return buildWindowMarkLine(winStartSec, winEndSec, winTotalSec);
-  }, [win, winStartSec, winEndSec, winTotalSec]);
-
-  const segmentStats = React.useMemo(() => {
-    if (!computed?.series || !chartData?.vSpeed) return null;
-    return computeSegmentStats(computed.series, chartData.vSpeed, statsRange.startSec, statsRange.endSec);
-  }, [computed?.series, chartData?.vSpeed, statsRange.startSec, statsRange.endSec]);
-
-  const altOption = React.useMemo(() => {
-    if (!chartData) return {};
-
-    return {
-      ...baseOption,
-      tooltip: {
-        trigger: "axis",
-        axisPointer: ALT_AXIS_POINTER,
-        formatter: altitudeTooltipFormatter,
-      },
-      grid: ALT_GRID,
-      xAxis: {
-        type: "value",
-        min: 0,
-        max: chartData.maxT,
-        axisLabel: { formatter: (v: number) => fmtTime(v) },
-      },
-      yAxis: {
-        type: "value",
-        name: "m",
-        min: chartData.altMin,
-        max: chartData.altMax,
-        scale: true,
-      },
-      dataZoom: ALT_DATAZOOM,
-      series: [
-        { id: "alt", name: "Altitude", type: "line", data: chartData.alt, showSymbol: false, lineStyle: { width: 2 } },
-        { id: "__window", name: "__window", type: "line", data: [], silent: true, markLine: windowMarkLine },
-        {
-          id: "__activeClimb",
-          name: "__activeClimb",
-          type: "line",
-          data: [],
-          silent: true,
-          z: 10,
-          markArea: activeClimbOverlay
-            ? {
-              silent: true,
-              itemStyle: { color: "rgba(255, 77, 79, 0.10)" },
-              data: [[{ xAxis: activeClimbOverlay.startSec }, { xAxis: activeClimbOverlay.endSec }]],
-            }
-            : undefined,
-          markLine: activeClimbOverlay
-            ? {
-              silent: true,
-              symbol: "none",
-              label: { show: false },
-              lineStyle: { color: "rgba(255, 77, 79, 0.95)", width: 3 },
-              data: [{ xAxis: activeClimbOverlay.startSec }, { xAxis: activeClimbOverlay.endSec }],
-            }
-            : undefined,
-        },
-        {
-          id: "__preview",
-          name: "__preview",
-          type: "line",
-          data: [],
-          silent: true,
-          markLine: {
-            data: [],
-            symbol: "none",
-            label: { show: false },
-            lineStyle: {
-              color: "rgba(46, 18, 230, 0.75)",
-              width: 2,
-              type: "dashed",
-              shadowBlur: 6,
-              shadowColor: "rgba(18, 230, 106, 0.9)",
-            },
-          },
-        },
-        ...buildClimbLinesSeries(showClimbLinesOnChart, climbMarkLineData),
-        ...buildActiveRangeMarkLine(activeRange),
-      ],
-    };
-  }, [chartData, baseOption, windowMarkLine, climbMarkLineData, showClimbLinesOnChart, activeClimbOverlay, activeRange]);
-
-  const varioOption = React.useMemo(() => {
-    if (!chartData) return {};
-    return {
-      ...baseOption,
-      tooltip: {
-        trigger: "axis",
-        axisPointer: {
-          type: "cross",
-          lineStyle: { color: "rgba(255, 77, 79, 0.9)", width: 1.5, type: "dashed", dashOffset: 0 },
-          label: {
-            show: true,
-            formatter: (params: AxisPointerLabelParams) => {
-              if (params.axisDimension === "x") return (params.value as number).toFixed(0) + " s";
-              if (params.axisDimension === "y") return (params.value as number).toFixed(1) + " m/s";
-              return "";
-            },
-          },
-        },
-        formatter: (params: any[]) => {
-          const y = params?.[0]?.value?.[1];
-          if (y == null) return "";
-          return `<strong>${Number(y).toFixed(1)} m/s</strong>`;
-        },
-      },
-      grid: { left: 56, right: 16, top: 24, bottom: 24 },
-      xAxis: { type: "value", min: 0, max: chartData.maxT, axisLabel: { formatter: (v: number) => fmtTime(v) } },
-      yAxis: { type: "value", name: "m/s", min: chartData.vMin, max: chartData.vMax, scale: true },
-      dataZoom: VARIO_DATAZOOM,
-      series: [
-        {
-          id: "vario",
-          name: `Vario (${varioWindowSec}s)`,
-          type: "line",
-          data: chartData.vSpeed,
-          showSymbol: false,
-          lineStyle: { width: 2 },
-          markLine: { symbol: ["none", "none"], lineStyle: { type: "dashed", opacity: 0.6 }, data: [{ yAxis: 0 }] },
-        },
-        {
-          id: "__activeClimb",
-          name: "__activeClimb",
-          type: "line",
-          data: [],
-          silent: true,
-          z: 10,
-          markArea: activeClimbOverlay
-            ? {
-              silent: true,
-              itemStyle: { color: "rgba(255, 77, 79, 0.10)" },
-              data: [[{ xAxis: activeClimbOverlay.startSec }, { xAxis: activeClimbOverlay.endSec }]],
-            }
-            : undefined,
-          markLine: activeClimbOverlay
-            ? {
-              silent: true,
-              symbol: "none",
-              label: { show: false },
-              lineStyle: { color: "rgba(255, 77, 79, 0.95)", width: 3 },
-              data: [{ xAxis: activeClimbOverlay.startSec }, { xAxis: activeClimbOverlay.endSec }],
-            }
-            : undefined,
-        },
-        { id: "__window", name: "__window", type: "line", data: [], silent: true, markLine: windowMarkLine },
-        {
-          id: "__preview",
-          name: "__preview",
-          type: "line",
-          data: [],
-          silent: true,
-          markLine: {
-            data: [],
-            symbol: "none",
-            label: { show: false },
-            lineStyle: {
-              color: "rgba(46, 18, 230, 0.75)",
-              width: 2,
-              type: "dashed",
-              shadowBlur: 6,
-              shadowColor: "rgba(18, 230, 106, 0.9)",
-            },
-          },
-        },
-        ...buildClimbLinesSeries(showClimbLinesOnChart, climbMarkLineData),
-        ...buildActiveRangeMarkLine(activeRange),
-      ],
-    };
-  }, [chartData, baseOption, windowMarkLine, varioWindowSec, activeRange, climbMarkLineData, showClimbLinesOnChart, activeClimbOverlay]);
-
-  const speedOption = React.useMemo(() => {
-    if (!chartData) return {};
-    return {
-      ...baseOption,
-      tooltip: {
-        trigger: "axis",
-        axisPointer: {
-          type: "cross",
-          lineStyle: { color: "rgba(255, 77, 79, 0.9)", width: 1.5, type: "dashed", dashOffset: 0 },
-          label: {
-            show: true,
-            formatter: (params: AxisPointerLabelParams) => {
-              if (params.axisDimension === "x") return (params.value as number).toFixed(0) + " s";
-              if (params.axisDimension === "y") return (params.value as number).toFixed(0) + " km/h";
-              return "";
-            },
-          },
-        },
-        formatter: (params: any[]) => {
-          const y = params?.[0]?.value?.[1];
-          if (y == null) return "";
-          return `<strong>${Number(y).toFixed(1)} km/h</strong>`;
-        },
-      },
-      grid: { left: 56, right: 16, top: 24, bottom: 24 },
-      xAxis: { type: "value", min: 0, max: chartData.maxT, axisLabel: { formatter: (v: number) => fmtTime(v) } },
-      yAxis: { type: "value", name: "km/h", scale: true },
-      dataZoom: SPEED_DATAZOOM,
-      series: [
-        { id: "speed", name: "Ground speed", type: "line", data: chartData.hSpeed, showSymbol: false, lineStyle: { width: 2 } },
-        { id: "__window", name: "__window", type: "line", data: [], silent: true, markLine: windowMarkLine },
-        {
-          id: "__preview",
-          name: "__preview",
-          type: "line",
-          data: [],
-          silent: true,
-          markLine: {
-            data: [],
-            symbol: "none",
-            label: { show: false },
-            lineStyle: {
-              color: "rgba(46, 18, 230, 0.75)",
-              width: 2,
-              type: "dashed",
-              shadowBlur: 6,
-              shadowColor: "rgba(18, 230, 106, 0.9)",
-            },
-          },
-        },
-        {
-          id: "__activeClimb",
-          name: "__activeClimb",
-          type: "line",
-          data: [],
-          silent: true,
-          z: 10,
-          markArea: activeClimbOverlay
-            ? {
-              silent: true,
-              itemStyle: { color: "rgba(255, 77, 79, 0.10)" },
-              data: [[{ xAxis: activeClimbOverlay.startSec }, { xAxis: activeClimbOverlay.endSec }]],
-            }
-            : undefined,
-          markLine: activeClimbOverlay
-            ? {
-              silent: true,
-              symbol: "none",
-              label: { show: false },
-              lineStyle: { color: "rgba(255, 77, 79, 0.95)", width: 3 },
-              data: [{ xAxis: activeClimbOverlay.startSec }, { xAxis: activeClimbOverlay.endSec }],
-            }
-            : undefined,
-        },
-        ...buildClimbLinesSeries(showClimbLinesOnChart, climbMarkLineData),
-        ...buildActiveRangeMarkLine(activeRange),
-      ],
-    };
-  }, [chartData, baseOption, windowMarkLine, activeRange, climbMarkLineData, showClimbLinesOnChart, activeClimbOverlay]);
-
-  React.useEffect(() => {
-    const a = altInstRef.current;
-    const v = varioInstRef.current;
-    const s = speedInstRef.current;
-
-    echarts.disconnect(chartGroupId);
-
-    if (!syncEnabled) return;
-
-    const instances: echarts.ECharts[] = [];
-    if (showAlt) {
-      if (!a) return;
-      instances.push(a);
-    }
-    if (showVario) {
-      if (!v) return;
-      instances.push(v);
-    }
-    if (showSpeed) {
-      if (!s) return;
-      instances.push(s);
-    }
-
-    if (instances.length < 2) return;
-
-    for (const inst of instances) inst.group = chartGroupId;
-    echarts.connect(chartGroupId);
-
-    return () => {
-      echarts.disconnect(chartGroupId);
-    };
-  }, [chartGroupId, syncEnabled, chartsReadyTick, showAlt, showVario, showSpeed]);
-
-  React.useEffect(() => {
-    const t = window.setTimeout(() => {
-      altInstRef.current?.resize?.();
-      varioInstRef.current?.resize?.();
-      speedInstRef.current?.resize?.();
-    }, 40);
-    return () => window.clearTimeout(t);
-  }, [splitPct]);
-
-  // ✅ KPI helper (local)
-  const KpiCard = React.useCallback(
-    ({
-      label,
-      value,
-      sub,
-    }: {
-      label: string;
-      value: React.ReactNode;
-      sub?: React.ReactNode;
-    }) => {
-      return (
-        <Paper withBorder p="sm" radius="md" style={{ height: "100%" }}>
-          <Text size="xs" c="dimmed">
-            {label}
-          </Text>
-          <Text fw={800} size="lg" style={{ lineHeight: 1.15 }}>
-            {value}
-          </Text>
-          {sub != null && (
-            <Text size="xs" c="dimmed" mt={4} style={{ lineHeight: 1.2 }}>
-              {sub}
-            </Text>
-          )}
-        </Paper>
-      );
-    },
-    []
-  );
-
-  // ✅ improved Stats panel: KPI tiles + optional detail row
-  const StatsPanel = React.useMemo(() => {
-    if (!showStats) return null;
-    if (!segmentStats || !segmentStats.hasSegment) return null;
-
-    const s = segmentStats;
-
-    const dur = fmtTime(s.durSec);
-
-    const altStart = s.altStart != null ? Math.round(s.altStart) : null;
-    const altEnd = s.altEnd != null ? Math.round(s.altEnd) : null;
-    const dAlt = s.dAlt != null ? s.dAlt : null;
-
-    const altMin = s.altMin != null ? Math.round(s.altMin) : null;
-    const altMax = s.altMax != null ? Math.round(s.altMax) : null;
-
-    const vAvg = s.vAvg != null ? s.vAvg : null;
-    const vMax = s.vMax != null ? s.vMax : null;
-    const vMin = s.vMin != null ? s.vMin : null;
-
-    const spAvg = s.speedAvgKmh != null ? s.speedAvgKmh : null;
-    const spMax = s.speedMaxKmh != null ? s.speedMaxKmh : null;
-
-    const pctClimb = s.pctClimb != null ? s.pctClimb : null;
-    const pctSink = s.pctSink != null ? s.pctSink : null;
-    const pctGlide = s.pctGlide != null ? s.pctGlide : null;
-
-    const bestClimbT = s.longestClimbDurSec != null ? s.longestClimbDurSec : null;
-    const bestClimbDAlt = s.longestClimbDAlt != null ? s.longestClimbDAlt : null;
-
-    const rangeStart = fmtTime(Math.min(statsRange.startSec, statsRange.endSec));
-    const rangeEnd = fmtTime(Math.max(statsRange.startSec, statsRange.endSec));
-    const totalTxt = fmtTime(winTotalSec);
-
-    const modeLabel =
-      statsSource === "climb" && climbNavActive
-        ? `Climb ${activeClimbIndex! + 1}/${climbs.length}`
-        : "Window";
-
-    const mixText =
-      pctClimb == null || pctSink == null || pctGlide == null
-        ? "—"
-        : `${pctClimb.toFixed(0)}% / ${pctSink.toFixed(0)}% / ${pctGlide.toFixed(0)}%`;
-
-    const mixPrimary =
-      pctClimb == null
-        ? "—"
-        : `Climb ${pctClimb.toFixed(0)}%`;
-
-    const mixSub =
-      pctSink == null || pctGlide == null
-        ? undefined
-        : `Sink ${pctSink.toFixed(0)}% · Glide ${pctGlide.toFixed(0)}%`;
-
-    return (
-      <Paper withBorder p="sm" radius="md">
-        <Group justify="space-between" align="center" mb="xs" wrap="nowrap">
-          <Group gap="xs" align="center" wrap="nowrap">
-            <Text fw={700} size="sm">
-              Stats
-            </Text>
-            <Badge variant="light" color={statsSource === "climb" ? "yellow" : "gray"}>
-              {modeLabel}
-            </Badge>
-          </Group>
-
-          <Text size="xs" c="dimmed" style={{ textAlign: "right" }}>
-            {rangeStart} → {rangeEnd} / {totalTxt}
-          </Text>
-        </Group>
-
-        {/* KPI tiles */}
-        <SimpleGrid
-          cols={{ base: 2, sm: 3, lg: 6 }}
-          spacing="xs"
-          verticalSpacing="xs"
-        >
-          <KpiCard
-            label="Δ Altitude"
-            value={dAlt == null ? "—" : `${fmtSigned(dAlt, 0)} m`}
-            sub={altMin == null || altMax == null ? undefined : `Min/Max: ${altMin} / ${altMax} m`}
-          />
-
-          <KpiCard
-            label="Duration"
-            value={dur}
-            sub={altStart == null || altEnd == null ? undefined : `Alt: ${altStart} → ${altEnd} m`}
-          />
-
-          <KpiCard
-            label={`Avg vario (${varioWindowSec}s)`}
-            value={vAvg == null ? "—" : `${vAvg.toFixed(1)} m/s`}
-            sub={vMin == null || vMax == null ? undefined : `Min/Max: ${vMin.toFixed(1)} / ${vMax.toFixed(1)}`}
-          />
-
-          <KpiCard
-            label="Avg speed"
-            value={spAvg == null ? "—" : `${spAvg.toFixed(1)} km/h`}
-            sub={spMax == null ? undefined : `Max: ${spMax.toFixed(1)} km/h`}
-          />
-
-          <KpiCard
-            label="Altitude start"
-            value={altStart == null ? "—" : `${altStart} m`}
-            sub={altEnd == null ? undefined : `End: ${altEnd} m`}
-          />
-
-          <KpiCard
-            label="Phase mix"
-            value={mixPrimary}
-            sub={mixSub ?? `Climb/Sink/Glide: ${mixText}`}
-          />
-        </SimpleGrid>
-
-        {/* Details row (still compact) */}
-        <Divider my="sm" />
-
-        <SimpleGrid cols={{ base: 2, sm: 3, lg: 5 }} spacing="xs" verticalSpacing="xs">
-          <Box>
-            <Text size="xs" c="dimmed">Altitude (Min / Max)</Text>
-            <Text fw={600}>{altMin == null || altMax == null ? "—" : `${altMin} / ${altMax} m`}</Text>
-          </Box>
-
-          <Box>
-            <Text size="xs" c="dimmed">Vario (Min / Max)</Text>
-            <Text fw={600}>{vMin == null || vMax == null ? "—" : `${vMin.toFixed(1)} / ${vMax.toFixed(1)} m/s`}</Text>
-          </Box>
-
-          <Box>
-            <Text size="xs" c="dimmed">Speed (Avg / Max)</Text>
-            <Text fw={600}>
-              {spAvg == null ? "—" : spAvg.toFixed(1)} / {spMax == null ? "—" : spMax.toFixed(1)} km/h
-            </Text>
-          </Box>
-
-          <Box>
-            <Text size="xs" c="dimmed">Climb / Sink / Glide</Text>
-            <Text fw={600}>{mixText}</Text>
-          </Box>
-
-          <Box>
-            <Text size="xs" c="dimmed">Longest climb phase</Text>
-            <Text fw={600}>
-              {bestClimbT == null || bestClimbDAlt == null ? "—" : `${fmtTime(bestClimbT)} (${fmtSigned(bestClimbDAlt, 0)} m)`}
-            </Text>
-          </Box>
-        </SimpleGrid>
-      </Paper>
-    );
-  }, [
-    showStats,
-    segmentStats,
-    varioWindowSec,
-    statsSource,
-    climbNavActive,
-    activeClimbIndex,
-    climbs.length,
-    statsRange.startSec,
-    statsRange.endSec,
-    winTotalSec,
-    KpiCard,
-  ]);
-
-  const zoomChartsToWindow = React.useCallback(() => {
-    const maxT = chartData?.maxT ?? winTotalSec ?? 0;
-    if (!Number.isFinite(maxT) || maxT <= 0) return;
-
-    let zs = Math.min(winStartSec, winEndSec);
-    let ze = Math.max(winStartSec, winEndSec);
-
-    if (!Number.isFinite(zs) || !Number.isFinite(ze) || Math.abs(ze - zs) < 0.0001) {
-      zs = 0;
-      ze = maxT;
-    }
-
-    zs = clamp(zs, 0, maxT);
-    ze = clamp(ze, 0, maxT);
-    if (ze <= zs) return;
-
-    if (showAlt && altInstRef.current) {
-      altInstRef.current.dispatchAction?.({ type: "dataZoom", dataZoomIndex: 0, startValue: zs, endValue: ze });
-      altInstRef.current.dispatchAction?.({ type: "dataZoom", dataZoomIndex: 1, startValue: zs, endValue: ze });
-    }
-    if (showVario && varioInstRef.current) {
-      varioInstRef.current.dispatchAction?.({ type: "dataZoom", dataZoomIndex: 0, startValue: zs, endValue: ze });
-    }
-    if (showSpeed && speedInstRef.current) {
-      speedInstRef.current.dispatchAction?.({ type: "dataZoom", dataZoomIndex: 0, startValue: zs, endValue: ze });
-    }
-  }, [chartData?.maxT, winTotalSec, winStartSec, winEndSec, showAlt, showVario, showSpeed]);
-
-  React.useEffect(() => {
-    if (!zoomSyncEnabled) return;
-    if (!win) return;
-    if (isDragging) return;
-    zoomChartsToWindow();
-  }, [zoomSyncEnabled, isDragging, zoomChartsToWindow, win]);
-
-  const resetChartsZoom = React.useCallback(() => {
-    const maxT = chartData?.maxT ?? winTotalSec ?? 0;
-    if (!Number.isFinite(maxT) || maxT <= 0) return;
-
-    const zs = 0;
-    const ze = maxT;
-
-    if (showAlt && altInstRef.current) {
-      altInstRef.current.dispatchAction?.({ type: "dataZoom", dataZoomIndex: 0, startValue: zs, endValue: ze });
-      altInstRef.current.dispatchAction?.({ type: "dataZoom", dataZoomIndex: 1, startValue: zs, endValue: ze });
-    }
-    if (showVario && varioInstRef.current) {
-      varioInstRef.current.dispatchAction?.({ type: "dataZoom", dataZoomIndex: 0, startValue: zs, endValue: ze });
-    }
-    if (showSpeed && speedInstRef.current) {
-      speedInstRef.current.dispatchAction?.({ type: "dataZoom", dataZoomIndex: 0, startValue: zs, endValue: ze });
-    }
-  }, [chartData?.maxT, winTotalSec, showAlt, showVario, showSpeed]);
-
-  const zoomDisabled =
-    !chartData ||
-    (!showAlt && !showVario && !showSpeed) ||
-    (showAlt && !chartReady.alt) ||
-    (showVario && !chartReady.vario) ||
-    (showSpeed && !chartReady.speed);
-
-  const dragRef = React.useRef<{
-    dragging: boolean;
-    startT: number | null;
-    lastT: number | null;
-    owner: ChartKind | null;
-  }>({ dragging: false, startT: null, lastT: null, owner: null });
-
-  const getVisibleCharts = React.useCallback(() => {
-    const out: Array<{ kind: ChartKind; inst: any }> = [];
-    if (showAlt && altInstRef.current) out.push({ kind: "alt", inst: altInstRef.current });
-    if (showVario && varioInstRef.current) out.push({ kind: "vario", inst: varioInstRef.current });
-    if (showSpeed && speedInstRef.current) out.push({ kind: "speed", inst: speedInstRef.current });
-    return out;
-  }, [showAlt, showVario, showSpeed]);
-
-  const focusActiveClimb = React.useCallback(() => {
-    if (!activeClimb || !computed?.fixesFull?.length) return;
-
-    const f = computed.fixesFull;
-    const sRaw = f[activeClimb.startIdx]?.tSec;
-    const eRaw = f[activeClimb.endIdx]?.tSec;
-    if (!Number.isFinite(sRaw) || !Number.isFinite(eRaw)) return;
-
-    const cs = Math.min(sRaw as number, eRaw as number);
-    const ce = Math.max(sRaw as number, eRaw as number);
-
-    const PAD = 0.75;
-    const maxT = chartData?.maxT ?? winTotalSec ?? ce;
-
-    const startValue = clamp(cs - PAD, 0, maxT);
-    const endValue = clamp(ce + PAD, 0, maxT);
-
-    applyRangeToCharts(getVisibleCharts(), startValue, endValue);
-
-    setMapFocusKey((x) => x + 1);
-
-    pulse();
-  }, [activeClimb, computed?.fixesFull, chartData?.maxT, winTotalSec, getVisibleCharts, pulse]);
-
-  function getVisibleXRange(inst: any, fallbackMaxT: number): { min: number; max: number } {
-    try {
-      const model = inst.getModel?.();
-      const xAxis = model?.getComponent?.("xAxis", 0);
-      const scale = xAxis?.axis?.scale;
-      const ext = scale?.getExtent?.();
-      if (Array.isArray(ext) && ext.length === 2) {
-        const min = Number(ext[0]);
-        const max = Number(ext[1]);
-        if (Number.isFinite(min) && Number.isFinite(max) && max > min) return { min, max };
-      }
-    } catch { }
-    return { min: 0, max: Number.isFinite(fallbackMaxT) ? fallbackMaxT : 0 };
-  }
-
-  function applyRangeToCharts(
-    charts: Array<{ kind: "alt" | "vario" | "speed"; inst: any }>,
-    startValue: number,
-    endValue: number
-  ) {
-    for (const { kind, inst } of charts) {
-      const idxs = kind === "alt" ? [0, 1] : [0];
-      for (const dataZoomIndex of idxs) {
-        inst.dispatchAction?.({ type: "dataZoom", dataZoomIndex, startValue, endValue });
-      }
-    }
-  }
-
-  function clampRange(start: number, end: number, maxT: number) {
-    let s = start;
-    let e = end;
-    if (!Number.isFinite(maxT) || maxT <= 0) return { s, e };
-
-    s = Math.max(0, Math.min(s, maxT));
-    e = Math.max(0, Math.min(e, maxT));
-
-    if (e < s) [s, e] = [e, s];
-
-    return { s, e };
-  }
-
-  React.useEffect(() => {
-    if (!activeClimb) return;
-
-    if (suppressAutoPanOnceRef.current) {
-      suppressAutoPanOnceRef.current = false; // one-shot
-      return;
-    }
-
-    if (isDragging) return;
-
-    const f = computed?.fixesFull ?? null;
-    if (!f) return;
-
-    const sRaw = f[activeClimb.startIdx]?.tSec;
-    const eRaw = f[activeClimb.endIdx]?.tSec;
-    if (!Number.isFinite(sRaw) || !Number.isFinite(eRaw)) return;
-
-    const cs = Math.min(sRaw as number, eRaw as number);
-    const ce = Math.max(sRaw as number, eRaw as number);
-
-    const charts = getVisibleCharts();
-    if (!charts.length) return;
-
-    const primary = charts.find((c) => c.kind === "alt") ?? charts[0];
-    const maxT = chartData?.maxT ?? winTotalSec ?? ce;
-
-    const { min, max } = getVisibleXRange(primary.inst, maxT);
-    const span = max - min;
-    if (!(span > 0)) return;
-
-    const PAD = 0.75;
-    const needLeft = cs < min + PAD;
-    const needRight = ce > max - PAD;
-
-    if (!needLeft && !needRight) return;
-
-    const climbLen = ce - cs;
-    const minNeededSpan = climbLen + 2 * PAD;
-
-    let newStart = min;
-    let newEnd = max;
-
-    if (minNeededSpan > span) {
-      newStart = cs - PAD;
-      newEnd = ce + PAD;
-    } else {
-      const center = (cs + ce) / 2;
-      newStart = center - span / 2;
-      newEnd = center + span / 2;
-    }
-
-    let { s, e } = clampRange(newStart, newEnd, maxT);
-
-    const hitLeftEdge = s <= 0.0001;
-    const maxT2 = chartData?.maxT ?? winTotalSec ?? 0;
-    const hitRightEdge = maxT2 > 0 && e >= maxT2 - 0.0001;
-
-    if (!hitLeftEdge && !hitRightEdge) {
-      const center = (cs + ce) / 2;
-      s = center - span / 2;
-      e = center + span / 2;
-      ({ s, e } = clampRange(s, e, maxT));
-    }
-
-    const stillMissing = cs < s + PAD || ce > e - PAD;
-    if (stillMissing) {
-      s = Math.max(0, cs - PAD);
-      e = Math.min(maxT, ce + PAD);
-    }
-
-    applyRangeToCharts(charts, s, e);
-  }, [activeClimb, computed?.fixesFull, isDragging, getVisibleCharts, chartData?.maxT, winTotalSec]);
-
-  const zoomSyncLockRef = React.useRef(false);
-
-  type ZoomRange =
-    | { kind: "value"; startValue: number; endValue: number }
-    | { kind: "percent"; start: number; end: number };
-
-  const setPreviewLinesAll = React.useCallback(
-    (a: number, b: number) => {
-      const x1 = Math.min(a, b);
-      const x2 = Math.max(a, b);
-
-      for (const { inst } of getVisibleCharts()) {
-        try {
-          inst.setOption({ series: [{ id: "__preview", markLine: { data: [{ xAxis: x1 }, { xAxis: x2 }] } }] }, { silent: true });
-        } catch { }
-      }
-    },
-    [getVisibleCharts]
-  );
-
-  const clearPreviewAll = React.useCallback(() => {
-    for (const { inst } of getVisibleCharts()) {
-      try {
-        inst.setOption({ series: [{ id: "__preview", markLine: { data: [] } }] }, { silent: true });
-      } catch { }
-    }
-  }, [getVisibleCharts]);
-
-  const setPanEnabled = React.useCallback((kind: ChartKind, enabled: boolean) => {
-    const inst = kind === "alt" ? altInstRef.current : kind === "vario" ? varioInstRef.current : speedInstRef.current;
-    if (!inst) return;
-
-    const dzId = kind === "alt" ? "dz_inside_alt" : kind === "vario" ? "dz_inside_vario" : "dz_inside_speed";
-
-    try {
-      inst.setOption({ dataZoom: [{ id: dzId, disabled: !enabled, moveOnMouseMove: enabled }] }, { silent: true });
-    } catch { }
-  }, []);
-
-  const resetSelection = React.useCallback(() => {
-    setWindow(null);
-    setDragging(false);
-
-    dragRef.current.dragging = false;
-    dragRef.current.startT = null;
-    dragRef.current.lastT = null;
-    dragRef.current.owner = null;
-
-    clearPreviewAll();
-    resetChartsZoom();
-  }, [setWindow, setDragging, clearPreviewAll, resetChartsZoom]);
-
-  const isSelectGesture = (ev: any) => {
-    const e = ev?.event ?? ev;
-    return !!e?.shiftKey;
-  };
-
-  const stopEvent = (ev: any) => {
-    const e = ev?.event ?? ev;
-    e?.preventDefault?.();
-    e?.stopPropagation?.();
-    e?.stopImmediatePropagation?.();
-  };
-
-  const attachRangeSelect = React.useCallback(
-    (kind: ChartKind) => {
-      const inst = kind === "alt" ? altInstRef.current : kind === "vario" ? varioInstRef.current : speedInstRef.current;
-      if (!inst) return;
-
-      const zr = inst.getZr?.();
-      if (!zr) return;
-
-      const getXY = (ev: any) => {
-        const ox = ev?.offsetX;
-        const oy = ev?.offsetY;
-        if (typeof ox === "number" && typeof oy === "number") return { x: ox, y: oy };
-
-        const ne = ev?.event;
-        const x2 = ne?.offsetX;
-        const y2 = ne?.offsetY;
-        if (typeof x2 === "number" && typeof y2 === "number") return { x: x2, y: y2 };
-
-        return null;
-      };
-
-      const pxToT = (x: number, y: number) => {
-        try {
-          const v = inst.convertFromPixel({ gridIndex: 0 }, [x, y]);
-          const t = Array.isArray(v) ? v[0] : v;
-          return typeof t === "number" && Number.isFinite(t) ? t : null;
-        } catch {
-          return null;
-        }
-      };
-
-      const onDown = (ev: any) => {
-        if (!isSelectGesture(ev)) return;
-        if (dragRef.current.dragging && dragRef.current.owner && dragRef.current.owner !== kind) return;
-
-        stopEvent(ev);
-
-        const xy = getXY(ev);
-        if (!xy) return;
-
-        const t = pxToT(xy.x, xy.y);
-        if (t == null) return;
-
-        dragRef.current.dragging = true;
-        dragRef.current.owner = kind;
-        dragRef.current.startT = t;
-        dragRef.current.lastT = t;
-
-        setDragging(true);
-
-        const maxT = chartData?.maxT ?? winTotalSec ?? 0;
-
-        setWindowThrottled({
-          startSec: t,
-          endSec: t,
-          totalSec: Number.isFinite(maxT) && maxT > 0 ? maxT : t,
-        });
-
-        setPanEnabled(kind, false);
-        setPreviewLinesAll(t, t);
-      };
-
-      const onMove = (ev: any) => {
-        if (!dragRef.current.dragging) return;
-        if (dragRef.current.owner !== kind) return;
-
-        stopEvent(ev);
-
-        const xy = getXY(ev);
-        if (!xy) return;
-
-        const t = pxToT(xy.x, xy.y);
-        if (t == null) return;
-
-        dragRef.current.lastT = t;
-
-        const s0 = dragRef.current.startT;
-        const s1 = dragRef.current.lastT;
-        if (s0 != null && s1 != null) {
-          setPreviewLinesAll(s0, s1);
-
-          const a = Math.min(s0, s1);
-          const b = Math.max(s0, s1);
-          const maxT = chartData?.maxT ?? winTotalSec ?? 0;
-
-          setWindowThrottled({
-            startSec: a,
-            endSec: b,
-            totalSec: Number.isFinite(maxT) && maxT > 0 ? maxT : b,
-          });
-        }
-      };
-
-      const onUp = (ev: any) => {
-        if (!dragRef.current.dragging) return;
-        if (dragRef.current.owner !== kind) return;
-
-        stopEvent(ev);
-
-        const xy = getXY(ev);
-        const t = xy ? pxToT(xy.x, xy.y) : null;
-        if (t != null) dragRef.current.lastT = t;
-
-        dragRef.current.dragging = false;
-        setDragging(false);
-
-        const startT = dragRef.current.startT;
-        const lastT = dragRef.current.lastT;
-
-        setPanEnabled(kind, true);
-
-        const maxT = chartData?.maxT ?? winTotalSec ?? 0;
-
-        if (startT == null || lastT == null) {
-          clearPreviewAll();
-          dragRef.current.startT = null;
-          dragRef.current.lastT = null;
-          dragRef.current.owner = null;
-          return;
-        }
-
-        let a = Math.min(startT, lastT);
-        let b = Math.max(startT, lastT);
-
-        if (Number.isFinite(maxT) && maxT > 0) {
-          a = clamp(a, 0, maxT);
-          b = clamp(b, 0, maxT);
-        }
-
-        const MIN_RANGE_SEC = 1.0;
-        if (b - a < MIN_RANGE_SEC) {
-          clearPreviewAll();
-          dragRef.current.startT = null;
-          dragRef.current.lastT = null;
-          dragRef.current.owner = null;
-          return;
-        }
-
-        setWindow({
-          startSec: a,
-          endSec: b,
-          totalSec: Number.isFinite(maxT) && maxT > 0 ? maxT : b,
-        });
-
-        clearPreviewAll();
-        dragRef.current.startT = null;
-        dragRef.current.lastT = null;
-        dragRef.current.owner = null;
-      };
-
-      const onGlobalOut = () => {
-        if (!dragRef.current.dragging) return;
-        if (dragRef.current.owner !== kind) return;
-
-        dragRef.current.dragging = false;
-        dragRef.current.startT = null;
-        dragRef.current.lastT = null;
-
-        setDragging(false);
-        setPanEnabled(kind, true);
-
-        clearPreviewAll();
-        setWindow(null);
-
-        dragRef.current.owner = null;
-      };
-
-      zr.on("mousedown", onDown);
-      zr.on("mousemove", onMove);
-      zr.on("mouseup", onUp);
-      zr.on("globalout", onGlobalOut);
-
-      return () => {
-        zr.off("mousedown", onDown);
-        zr.off("mousemove", onMove);
-        zr.off("mouseup", onUp);
-        zr.off("globalout", onGlobalOut);
-      };
-    },
-    [chartData?.maxT, winTotalSec, setDragging, setPanEnabled, setPreviewLinesAll, clearPreviewAll, setWindow, setWindowThrottled]
-  );
-
-  React.useEffect(() => {
-    if (!zoomSyncEnabled) return;
-
-    const pickZoomRangeFromEvent = (e: any): ZoomRange | null => {
-      const b0 = e?.batch?.[0];
-      if (!b0) return null;
-
-      const sv = b0.startValue;
-      const ev = b0.endValue;
-      if (typeof sv === "number" && Number.isFinite(sv) && typeof ev === "number" && Number.isFinite(ev)) {
-        return { kind: "value", startValue: sv, endValue: ev };
-      }
-
-      const sp = b0.start;
-      const ep = b0.end;
-      if (typeof sp === "number" && Number.isFinite(sp) && typeof ep === "number" && Number.isFinite(ep)) {
-        return { kind: "percent", start: sp, end: ep };
-      }
-
-      return null;
-    };
-
-    const applyZoomRangeToChart = (inst: any, kind: ChartKind, r: ZoomRange) => {
-      if (!inst) return;
-
-      const idxs = kind === "alt" ? [0, 1] : [0];
-
-      for (const dataZoomIndex of idxs) {
-        if (r.kind === "value") {
-          inst.dispatchAction?.({ type: "dataZoom", dataZoomIndex, startValue: r.startValue, endValue: r.endValue });
-        } else {
-          inst.dispatchAction?.({ type: "dataZoom", dataZoomIndex, start: r.start, end: r.end });
-        }
-      }
-    };
-
-    const visibles = getVisibleCharts();
-    if (visibles.length < 2) return;
-
-    const cleanups: Array<() => void> = [];
-
-    for (const { inst } of visibles) {
-      const onDataZoom = (e: any) => {
-        if (isDragging) return;
-        if (zoomSyncLockRef.current) return;
-
-        const r = pickZoomRangeFromEvent(e);
-        if (!r) return;
-
-        zoomSyncLockRef.current = true;
-        try {
-          for (const other of visibles) {
-            if (other.inst === inst) continue;
-            applyZoomRangeToChart(other.inst, other.kind, r);
-          }
-        } finally {
-          queueMicrotask(() => {
-            zoomSyncLockRef.current = false;
-          });
-        }
-      };
-
-      inst.on?.("dataZoom", onDataZoom);
-      cleanups.push(() => inst.off?.("dataZoom", onDataZoom));
-    }
-
-    return () => {
-      for (const fn of cleanups) fn();
-    };
-  }, [zoomSyncEnabled, getVisibleCharts, isDragging, chartsReadyTick]);
-
-  React.useEffect(() => {
-    const cleanups: Array<(() => void) | undefined> = [];
-
-    if (showAlt && altInstRef.current) cleanups.push(attachRangeSelect("alt"));
-    if (showVario && varioInstRef.current) cleanups.push(attachRangeSelect("vario"));
-    if (showSpeed && speedInstRef.current) cleanups.push(attachRangeSelect("speed"));
-
-    return () => {
-      for (const fn of cleanups) fn?.();
-    };
-  }, [showAlt, showVario, showSpeed, chartsReadyTick, attachRangeSelect]);
-
-  const mapFixesFull = computedWithLite?.fixesFull ?? EMPTY_FIXES;
-  const mapFixesLite = computedWithLite?.fixesLite ?? EMPTY_FIXES;
-  const mapThermals = thermals ?? EMPTY_THERMALS;
-
-  const [climbListOpen, setClimbListOpen] = React.useState(false);
-
-  const [hoveredClimbIndex, setHoveredClimbIndex] = React.useState<number | null>(null);
-
-  type ClimbSortMode = "normal" | "gainDesc" | "gainAsc";
-
-  const [climbSortMode, setClimbSortMode] = React.useState<ClimbSortMode>("normal");
-
-  const sortedClimbs = React.useMemo(() => {
-    if (climbSortMode === "normal") return climbs;
-
-    const copy = [...climbs];
-
-    if (climbSortMode === "gainDesc") {
-      copy.sort((a, b) => b.gainM - a.gainM);
-    } else if (climbSortMode === "gainAsc") {
-      copy.sort((a, b) => a.gainM - b.gainM);
-    }
-
-    return copy;
-  }, [climbs, climbSortMode]);
-
-  const setShowAlt = useFlightDetailsUiStore((s) => s.setShowAlt);
-  const setShowVario = useFlightDetailsUiStore((s) => s.setShowVario);
-  const setShowSpeed = useFlightDetailsUiStore((s) => s.setShowSpeed);
-  const suppressAutoPanOnceRef = React.useRef(false);
-
-  const makeOnChartReady = React.useCallback(
-    (kind: "alt" | "vario" | "speed") => {
-      return (inst: any) => {
-        if (kind === "alt") altInstRef.current = inst;
-        if (kind === "vario") varioInstRef.current = inst;
-        if (kind === "speed") speedInstRef.current = inst;
-
-        inst.group = chartGroupId;
-
-        setChartReady((r) => ({ ...r, [kind]: true }));
-        setChartsReadyTick((x) => x + 1);
-      };
-    },
-    [chartGroupId]
-  );
-
   return (
     <Box p="md">
       <Stack gap="sm">
         {/* HEADER */}
         <Group justify="space-between" align="center" wrap="nowrap">
           <Group gap="md" align="center" wrap="nowrap">
-
             <Group gap="md" align="center" wrap="nowrap">
-              <Button
-                variant="light"
-                onClick={() => navigate({ to: "/flights" })}
-              >
+              <Button variant="light" onClick={() => navigate({ to: "/flights" })}>
                 ← Back to flights
               </Button>
 
@@ -1701,9 +211,7 @@ export function FlightDetailsRoute() {
                 </Text>
 
                 <Text size="xs" c="dimmed">
-                  {flight?.flightDate
-                    ? new Date(flight.flightDate).toLocaleDateString()
-                    : ""}
+                  {flight?.flightDate ? new Date(flight.flightDate).toLocaleDateString() : ""}
                   {currentFlightPos >= 0 && flightIds.length > 0
                     ? ` · ${currentFlightPos + 1} / ${flightIds.length}`
                     : ""}
@@ -1730,8 +238,8 @@ export function FlightDetailsRoute() {
                 </Button>
               </Group>
             </Group>
-            <Group gap="xs" align="center" wrap="nowrap">
 
+            <Group gap="xs" align="center" wrap="nowrap">
               <Button size="xs" variant="light" onClick={() => setClimbListOpen(true)} disabled={!hasClimbs}>
                 Climbs
               </Button>
@@ -1740,7 +248,11 @@ export function FlightDetailsRoute() {
               </Button>
 
               <Text size="sm" fw={600} style={{ minWidth: 110, textAlign: "center" }}>
-                {climbNavActive ? `Climb ${activeClimbIndex! + 1} / ${climbs.length}` : hasClimbs ? `${climbs.length} climbs` : "No climbs"}
+                {climbNavActive
+                  ? `Climb ${activeClimbIndex! + 1} / ${climbs.length}`
+                  : hasClimbs
+                    ? `${climbs.length} climbs`
+                    : "No climbs"}
               </Text>
 
               <Button size="xs" variant="subtle" onClick={nextClimb} disabled={!hasClimbs}>
@@ -1754,7 +266,6 @@ export function FlightDetailsRoute() {
           </Group>
 
           <Group gap="xs" align="center" wrap="nowrap">
-
             <Group justify="space-between">
               <Button size="xs" variant="light" onClick={resetSelection} disabled={!win}>
                 Reset selection
@@ -1764,6 +275,7 @@ export function FlightDetailsRoute() {
                 Zoom to window
               </Button>
             </Group>
+
             <Button size="xs" variant={followEnabled ? "filled" : "light"} onClick={() => setFollowEnabled(!followEnabled)}>
               Follow
             </Button>
@@ -1808,108 +320,8 @@ export function FlightDetailsRoute() {
                 {id}
               </Text>
             </Group>
+
             <Divider my="sm" />
-
-            <Box>
-              <Group justify="space-between" align="center" mb={6}>
-                <Text fw={600} size="sm">Climbs</Text>
-                <Badge variant="light">{climbs.length}</Badge>
-              </Group>
-
-              {!hasClimbs ? (
-                <Text c="dimmed" size="sm">No climbs detected.</Text>
-              ) : (
-                <Stack gap="xs">
-                  <Chip.Group
-                    value={climbSortMode}
-                    onChange={(v) => setClimbSortMode((v ?? "normal") as ClimbSortMode)}
-                  >
-                    <Group gap="xs">
-                      <Chip value="normal" radius="sm">Normal</Chip>
-                      <Chip value="gainDesc" radius="sm">Gain ↓</Chip>
-                      <Chip value="gainAsc" radius="sm">Gain ↑</Chip>
-                    </Group>
-                  </Chip.Group>
-
-                  <Divider my={6} />
-
-                  <Stack gap="xs">
-                    {sortedClimbs.map((c, listIdx) => {
-                      const f = computed?.fixesFull ?? [];
-                      const sSec = f[c.startIdx]?.tSec ?? null;
-                      const eSec = f[c.endIdx]?.tSec ?? null;
-
-                      const durSec =
-                        typeof sSec === "number" && typeof eSec === "number"
-                          ? Math.max(0, eSec - sSec)
-                          : null;
-
-                      const originalIndex = climbs.findIndex(
-                        (cl) => cl.startIdx === c.startIdx && cl.endIdx === c.endIdx
-                      );
-
-                      const isActive = originalIndex !== -1 && activeClimbIndex === originalIndex;
-
-                      return (
-                        <Paper
-                          key={`${c.startIdx}-${c.endIdx}-${listIdx}`}
-                          withBorder
-                          p="sm"
-                          radius="md"
-                          style={{
-                            cursor: "pointer",
-                            borderColor: isActive ? "rgba(255,212,0,0.9)" : undefined,
-                            boxShadow: isActive ? "0 0 0 2px rgba(255,212,0,0.25)" : undefined,
-                          }}
-                          onClick={() => {
-                            if (originalIndex !== -1) {
-                              suppressAutoPanOnceRef.current = true;   // ✅ kein Auto-Zoom dafür
-                              setActiveClimbIndex(originalIndex);
-                            }
-                            setClimbListOpen(false);
-                          }}
-                        >
-                          <Group justify="space-between" align="flex-start" wrap="nowrap">
-                            <Box>
-                              <Text fw={700} size="sm">
-                                Climb {originalIndex !== -1 ? originalIndex + 1 : listIdx + 1}
-                              </Text>
-                              <Text size="xs" c="dimmed">
-                                {durSec == null ? "—" : fmtTime(durSec)} · {Math.round(c.startAltM)} → {Math.round(c.peakAltM)} m
-                              </Text>
-                            </Box>
-
-                            <Text fw={700} size="sm">
-                              {durSec && durSec > 0 ? `${(c.gainM / durSec).toFixed(2)} m/s` : "—"}
-                            </Text>
-                          </Group>
-
-                          <Divider my={8} />
-
-                          <SimpleGrid cols={3} spacing="xs" verticalSpacing="xs">
-                            <Box>
-                              <Text size="xs" c="dimmed">Start</Text>
-                              <Text fw={600} size="sm">{Math.round(c.startAltM)} m</Text>
-                            </Box>
-                            <Box>
-                              <Text size="xs" c="dimmed">Gain</Text>
-                              <Text fw={700} size="sm" style={{ color: "rgba(255,212,0,1)" }}>
-                                {fmtSigned(c.gainM, 0)} m
-                              </Text>
-                            </Box>
-                            <Box>
-                              <Text size="xs" c="dimmed">Peak</Text>
-                              <Text fw={600} size="sm">{Math.round(c.peakAltM)} m</Text>
-                            </Box>
-                          </SimpleGrid>
-                        </Paper>
-                      );
-                    })}
-                  </Stack>
-                </Stack>
-              )}
-            </Box>
-
 
             <SimpleGrid cols={2} spacing="xs" verticalSpacing="xs">
               <Box>
@@ -1931,7 +343,9 @@ export function FlightDetailsRoute() {
                   Active climb
                 </Text>
                 <Text fw={600}>
-                  {activeClimb && activeClimbGainM != null && activeClimbDurSec != null ? `${fmtSigned(activeClimbGainM, 0)} m · ${fmtTime(activeClimbDurSec)}` : "—"}
+                  {activeClimb && activeClimbGainM != null && activeClimbDurSec != null
+                    ? `${fmtSigned(activeClimbGainM, 0)} m · ${fmtTime(activeClimbDurSec)}`
+                    : "—"}
                 </Text>
               </Box>
 
@@ -1948,24 +362,22 @@ export function FlightDetailsRoute() {
             <Divider my="sm" />
 
             <Group justify="space-between">
-              <Button size="xs" variant="light" onClick={focusActiveClimb} disabled={!activeClimb || !computed?.fixesFull?.length}>
-                Focus active climb
-              </Button>
-
               <Button
                 size="xs"
                 variant="light"
-                onClick={() => {
-                  setSettingsOpen(false);
-                  pulse();
-                }}
+                onClick={focusActiveClimb}
+                disabled={!activeClimb || !computed?.fixesFull?.length}
               >
+                Focus active climb
+              </Button>
+
+              <Button size="xs" variant="light" onClick={() => setSettingsOpen(false)}>
                 Close
               </Button>
             </Group>
           </Paper>
 
-          <Stack gap="md">
+          <Stack gap="md" mt="md">
             <Box>
               <Text fw={600} size="sm" mb={6}>
                 Charts
@@ -1973,7 +385,6 @@ export function FlightDetailsRoute() {
 
               {(() => {
                 type ChartToggle = "alt" | "vario" | "speed";
-
                 const chartSelection: ChartToggle[] = [
                   showAlt ? "alt" : null,
                   showVario ? "vario" : null,
@@ -2006,7 +417,6 @@ export function FlightDetailsRoute() {
                 );
               })()}
 
-
               <Divider my="sm" />
 
               <Text fw={600} size="sm" mb={6}>
@@ -2014,27 +424,40 @@ export function FlightDetailsRoute() {
               </Text>
 
               <Stack gap="xs">
-                <Checkbox label="Climb lines" checked={showClimbLinesOnChart} onChange={(e) => setShowClimbLinesOnChart(e.currentTarget.checked)} />
-
-                <Checkbox label="Thermals" checked={showThermalsOnMap} onChange={(e) => setShowThermalsOnMap(e.currentTarget.checked)} />
-
-                <Checkbox label="Auto fit selection" checked={autoFitSelection} onChange={(e) => setAutoFitSelectionUi(e.currentTarget.checked)} />
+                <Checkbox
+                  label="Climb lines"
+                  checked={showClimbLinesOnChart}
+                  onChange={(e) => setShowClimbLinesOnChart(e.currentTarget.checked)}
+                />
+                <Checkbox
+                  label="Thermals"
+                  checked={showThermalsOnMap}
+                  onChange={(e) => setShowThermalsOnMap(e.currentTarget.checked)}
+                />
+                <Checkbox
+                  label="Auto fit selection"
+                  checked={autoFitSelection}
+                  onChange={(e) => setAutoFitSelectionUi(e.currentTarget.checked)}
+                />
               </Stack>
 
               <Divider my="sm" />
 
-              <Text fw={600} size="sm" mb={6}>
-                Map
-              </Text>
               <Text fw={600} size="sm" mb={6}>
                 Map style
               </Text>
 
               <Chip.Group value={baseMap} onChange={(v) => setBaseMap(v as UiBaseMap)}>
                 <Group gap="xs">
-                  <Chip value="osm" radius="sm" variant="filled">OSM</Chip>
-                  <Chip value="topo" radius="sm" variant="filled">Topo</Chip>
-                  <Chip value="esriBalanced" radius="sm" variant="filled">Topo Lite</Chip>
+                  <Chip value="osm" radius="sm" variant="filled">
+                    OSM
+                  </Chip>
+                  <Chip value="topo" radius="sm" variant="filled">
+                    Topo
+                  </Chip>
+                  <Chip value="esriBalanced" radius="sm" variant="filled">
+                    Topo Lite
+                  </Chip>
                 </Group>
               </Chip.Group>
             </Box>
@@ -2053,6 +476,7 @@ export function FlightDetailsRoute() {
           </Stack>
         </Drawer>
 
+        {/* CLIMBS DRAWER */}
         <Drawer
           opened={climbListOpen}
           onClose={() => setClimbListOpen(false)}
@@ -2066,29 +490,33 @@ export function FlightDetailsRoute() {
           overlayProps={{ opacity: 0.35, blur: 2 }}
         >
           {!hasClimbs ? (
-            <Text c="dimmed" size="sm">No climbs detected.</Text>
+            <Text c="dimmed" size="sm">
+              No climbs detected.
+            </Text>
           ) : (
-
-
             <Stack gap="xs">
               <Box>
                 <Text fw={600} size="sm" mb={6}>
                   Sort climbs
                 </Text>
 
-                <Chip.Group
-                  value={climbSortMode}
-                  onChange={(v) => setClimbSortMode(v as ClimbSortMode)}
-                >
+                <Chip.Group value={climbSortMode} onChange={(v) => setClimbSortMode((v ?? "normal") as any)}>
                   <Group gap="xs">
-                    <Chip value="normal" radius="sm">Normal</Chip>
-                    <Chip value="gainDesc" radius="sm">Gain ↓</Chip>
-                    <Chip value="gainAsc" radius="sm">Gain ↑</Chip>
+                    <Chip value="normal" radius="sm">
+                      Normal
+                    </Chip>
+                    <Chip value="gainDesc" radius="sm">
+                      Gain ↓
+                    </Chip>
+                    <Chip value="gainAsc" radius="sm">
+                      Gain ↑
+                    </Chip>
                   </Group>
                 </Chip.Group>
               </Box>
 
               <Divider my="sm" />
+
               {sortedClimbs.map((c, listIdx) => {
                 const f = computed?.fixesFull ?? [];
                 const sSec = f[c.startIdx]?.tSec ?? null;
@@ -2099,10 +527,7 @@ export function FlightDetailsRoute() {
                     ? Math.max(0, eSec - sSec)
                     : null;
 
-                // 🔑 Original-Index finden (weil activeClimbIndex auf climbs basiert)
-                const originalIndex = climbs.findIndex(
-                  (cl) => cl.startIdx === c.startIdx && cl.endIdx === c.endIdx
-                );
+                const originalIndex = climbs.findIndex((cl) => cl.startIdx === c.startIdx && cl.endIdx === c.endIdx);
 
                 const isActive = originalIndex !== -1 && activeClimbIndex === originalIndex;
                 const isHover = originalIndex !== -1 && hoveredClimbIndex === originalIndex;
@@ -2117,7 +542,11 @@ export function FlightDetailsRoute() {
                     onMouseLeave={() => setHoveredClimbIndex(null)}
                     style={{
                       cursor: "pointer",
-                      borderColor: isActive ? "rgba(255,212,0,0.9)" : isHover ? "rgba(255,212,0,0.45)" : undefined,
+                      borderColor: isActive
+                        ? "rgba(255,212,0,0.9)"
+                        : isHover
+                          ? "rgba(255,212,0,0.45)"
+                          : undefined,
                       boxShadow: isActive
                         ? "0 0 0 2px rgba(255,212,0,0.35)"
                         : isHover
@@ -2134,7 +563,6 @@ export function FlightDetailsRoute() {
                     <Group justify="space-between" align="flex-start" wrap="nowrap">
                       <Box>
                         <Text fw={700} size="sm">
-                          {/* optional: Original-Nummer anzeigen */}
                           Climb {originalIndex !== -1 ? originalIndex + 1 : listIdx + 1}
                         </Text>
                         <Text size="xs" c="dimmed">
@@ -2151,20 +579,30 @@ export function FlightDetailsRoute() {
 
                     <SimpleGrid cols={3} spacing="xs" verticalSpacing="xs">
                       <Box>
-                        <Text size="xs" c="dimmed">Start</Text>
-                        <Text fw={600} size="sm">{Math.round(c.startAltM)} m</Text>
+                        <Text size="xs" c="dimmed">
+                          Start
+                        </Text>
+                        <Text fw={600} size="sm">
+                          {Math.round(c.startAltM)} m
+                        </Text>
                       </Box>
 
                       <Box>
-                        <Text size="xs" c="dimmed">Gain</Text>
+                        <Text size="xs" c="dimmed">
+                          Gain
+                        </Text>
                         <Text fw={700} size="sm" style={{ color: "rgba(255,212,0,1)" }}>
                           {fmtSigned(c.gainM, 0)} m
                         </Text>
                       </Box>
 
                       <Box>
-                        <Text size="xs" c="dimmed">Peak</Text>
-                        <Text fw={600} size="sm">{Math.round(c.peakAltM)} m</Text>
+                        <Text size="xs" c="dimmed">
+                          Peak
+                        </Text>
+                        <Text fw={600} size="sm">
+                          {Math.round(c.peakAltM)} m
+                        </Text>
                       </Box>
                     </SimpleGrid>
 
@@ -2174,7 +612,10 @@ export function FlightDetailsRoute() {
                         variant="subtle"
                         onClick={(e) => {
                           e.stopPropagation();
-                          if (originalIndex !== -1) setActiveClimbIndex(originalIndex);
+                          if (originalIndex !== -1) {
+                            suppressAutoPanOnceRef.current = true;
+                            setActiveClimbIndex(originalIndex);
+                          }
                           setClimbListOpen(false);
                           queueMicrotask(() => focusActiveClimb());
                         }}
@@ -2185,11 +626,9 @@ export function FlightDetailsRoute() {
                   </Paper>
                 );
               })}
-
             </Stack>
           )}
         </Drawer>
-
 
         {/* BODY */}
         {busy && <Text c="dimmed">Loading...</Text>}
@@ -2231,7 +670,17 @@ export function FlightDetailsRoute() {
                 overflow: "hidden",
               }}
             >
-              {StatsPanel}
+              <FlightStatsPanel
+                show={showStats}
+                segmentStats={segmentStats as any}
+                varioWindowSec={varioWindowSec}
+                statsSource={statsSource}
+                climbNavActive={climbNavActive}
+                activeClimbIndex={activeClimbIndex}
+                climbsLength={climbs.length}
+                statsRange={statsRange}
+                winTotalSec={winTotalSec}
+              />
 
               <Box style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", gap: 10 }}>
                 {showAlt && (
