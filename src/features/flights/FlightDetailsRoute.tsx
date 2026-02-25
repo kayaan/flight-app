@@ -1664,6 +1664,22 @@ export function FlightDetailsRoute() {
   const setShowSpeed = useFlightDetailsUiStore((s) => s.setShowSpeed);
   const suppressAutoPanOnceRef = React.useRef(false);
 
+  const makeOnChartReady = React.useCallback(
+    (kind: "alt" | "vario" | "speed") => {
+      return (inst: any) => {
+        if (kind === "alt") altInstRef.current = inst;
+        if (kind === "vario") varioInstRef.current = inst;
+        if (kind === "speed") speedInstRef.current = inst;
+
+        inst.group = chartGroupId;
+
+        setChartReady((r) => ({ ...r, [kind]: true }));
+        setChartsReadyTick((x) => x + 1);
+      };
+    },
+    [chartGroupId]
+  );
+
   return (
     <Box p="md">
       <Stack gap="sm">
@@ -2230,12 +2246,7 @@ export function FlightDetailsRoute() {
                       style={{ height: "100%", width: "100%" }}
                       notMerge={false}
                       replaceMerge={["series"]}
-                      onChartReady={(inst) => {
-                        altInstRef.current = inst;
-                        inst.group = chartGroupId;
-                        setChartReady((r) => ({ ...r, alt: true }));
-                        setChartsReadyTick((x) => x + 1);
-                      }}
+                      onChartReady={makeOnChartReady("alt")}
                     />
                   </Box>
                 )}
@@ -2252,12 +2263,7 @@ export function FlightDetailsRoute() {
                       style={{ height: "100%", width: "100%" }}
                       notMerge={false}
                       replaceMerge={["series"]}
-                      onChartReady={(inst) => {
-                        varioInstRef.current = inst;
-                        inst.group = chartGroupId;
-                        setChartReady((r) => ({ ...r, vario: true }));
-                        setChartsReadyTick((x) => x + 1);
-                      }}
+                      onChartReady={makeOnChartReady("vario")}
                     />
                   </Box>
                 )}
@@ -2274,12 +2280,7 @@ export function FlightDetailsRoute() {
                       style={{ height: "100%", width: "100%" }}
                       notMerge={false}
                       replaceMerge={["series"]}
-                      onChartReady={(inst) => {
-                        speedInstRef.current = inst;
-                        inst.group = chartGroupId;
-                        setChartReady((r) => ({ ...r, speed: true }));
-                        setChartsReadyTick((x) => x + 1);
-                      }}
+                      onChartReady={makeOnChartReady("speed")}
                     />
                   </Box>
                 )}
