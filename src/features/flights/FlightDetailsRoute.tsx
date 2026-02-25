@@ -31,7 +31,30 @@ import { fmtSigned, fmtTime } from "./flightDetails.engine";
 import { useFlightDetailsModel } from "./useFlightDetailsModel";
 import type { BaseMap as UiBaseMap } from "./store/flightDetailsUi.store";
 
-import { FlightStatsPanel } from "./FlightStatsPanel";
+// KPI helper stays UI-side
+type KpiCardProps = {
+  label: string;
+  value: React.ReactNode;
+  sub?: React.ReactNode;
+};
+
+function KpiCard({ label, value, sub }: KpiCardProps) {
+  return (
+    <Paper withBorder p="sm" radius="md" style={{ height: "100%" }}>
+      <Text size="xs" c="dimmed">
+        {label}
+      </Text>
+      <Text fw={800} size="lg" style={{ lineHeight: 1.15 }}>
+        {value}
+      </Text>
+      {sub != null && (
+        <Text size="xs" c="dimmed" mt={4} style={{ lineHeight: 1.2 }}>
+          {sub}
+        </Text>
+      )}
+    </Paper>
+  );
+}
 
 export function FlightDetailsRoute() {
   const token = useAuthStore((s) => s.token);
@@ -170,7 +193,6 @@ export function FlightDetailsRoute() {
     const x = clientX - rect.left;
     const pct = (x / rect.width) * 100;
 
-    // clamp locally
     const clamped = Math.max(40, Math.min(pct, 75));
     setSplitPct(clamped);
   }, []);
@@ -194,6 +216,163 @@ export function FlightDetailsRoute() {
     };
   }, [onDividerPointerMove, stopDragging]);
 
+  const StatsPanel = React.useMemo(() => {
+    if (!showStats) return null;
+    if (!segmentStats || !segmentStats.hasSegment) return null;
+
+    const s = segmentStats;
+
+    const dur = fmtTime(s.durSec);
+    const altStart = s.altStart != null ? Math.round(s.altStart) : null;
+    const altEnd = s.altEnd != null ? Math.round(s.altEnd) : null;
+    const dAlt = s.dAlt != null ? s.dAlt : null;
+
+    const altMin = s.altMin != null ? Math.round(s.altMin) : null;
+    const altMax = s.altMax != null ? Math.round(s.altMax) : null;
+
+    const vAvg = s.vAvg != null ? s.vAvg : null;
+    const vMax = s.vMax != null ? s.vMax : null;
+    const vMin = s.vMin != null ? s.vMin : null;
+
+    const spAvg = s.speedAvgKmh != null ? s.speedAvgKmh : null;
+    const spMax = s.speedMaxKmh != null ? s.speedMaxKmh : null;
+
+    const pctClimb = s.pctClimb != null ? s.pctClimb : null;
+    const pctSink = s.pctSink != null ? s.pctSink : null;
+    const pctGlide = s.pctGlide != null ? s.pctGlide : null;
+
+    const bestClimbT = s.longestClimbDurSec != null ? s.longestClimbDurSec : null;
+    const bestClimbDAlt = s.longestClimbDAlt != null ? s.longestClimbDAlt : null;
+
+    const rangeStart = fmtTime(Math.min(statsRange.startSec, statsRange.endSec));
+    const rangeEnd = fmtTime(Math.max(statsRange.startSec, statsRange.endSec));
+    const totalTxt = fmtTime(winTotalSec);
+
+    const modeLabel =
+      statsSource === "climb" && climbNavActive
+        ? `Climb ${activeClimbIndex! + 1}/${climbs.length}`
+        : "Window";
+
+    const mixText =
+      pctClimb == null || pctSink == null || pctGlide == null
+        ? "—"
+        : `${pctClimb.toFixed(0)}% / ${pctSink.toFixed(0)}% / ${pctGlide.toFixed(0)}%`;
+
+    const mixPrimary = pctClimb == null ? "—" : `Climb ${pctClimb.toFixed(0)}%`;
+    const mixSub =
+      pctSink == null || pctGlide == null
+        ? undefined
+        : `Sink ${pctSink.toFixed(0)}% · Glide ${pctGlide.toFixed(0)}%`;
+
+    return (
+      <Paper withBorder p="sm" radius="md">
+        <Group justify="space-between" align="center" mb="xs" wrap="nowrap">
+          <Group gap="xs" align="center" wrap="nowrap">
+            <Text fw={700} size="sm">
+              Stats
+            </Text>
+            <Badge variant="light" color={statsSource === "climb" ? "yellow" : "gray"}>
+              {modeLabel}
+            </Badge>
+          </Group>
+
+          <Text size="xs" c="dimmed" style={{ textAlign: "right" }}>
+            {rangeStart} → {rangeEnd} / {totalTxt}
+          </Text>
+        </Group>
+
+        <SimpleGrid cols={{ base: 2, sm: 3, lg: 6 }} spacing="xs" verticalSpacing="xs">
+          <KpiCard
+            label="Δ Altitude"
+            value={dAlt == null ? "—" : `${fmtSigned(dAlt, 0)} m`}
+            sub={altMin == null || altMax == null ? undefined : `Min/Max: ${altMin} / ${altMax} m`}
+          />
+          <KpiCard
+            label="Duration"
+            value={dur}
+            sub={altStart == null || altEnd == null ? undefined : `Alt: ${altStart} → ${altEnd} m`}
+          />
+          <KpiCard
+            label={`Avg vario (${varioWindowSec}s)`}
+            value={vAvg == null ? "—" : `${vAvg.toFixed(1)} m/s`}
+            sub={vMin == null || vMax == null ? undefined : `Min/Max: ${vMin.toFixed(1)} / ${vMax.toFixed(1)}`}
+          />
+          <KpiCard
+            label="Avg speed"
+            value={spAvg == null ? "—" : `${spAvg.toFixed(1)} km/h`}
+            sub={spMax == null ? undefined : `Max: ${spMax.toFixed(1)} km/h`}
+          />
+          <KpiCard
+            label="Altitude start"
+            value={altStart == null ? "—" : `${altStart} m`}
+            sub={altEnd == null ? undefined : `End: ${altEnd} m`}
+          />
+          <KpiCard label="Phase mix" value={mixPrimary} sub={mixSub ?? `Climb/Sink/Glide: ${mixText}`} />
+        </SimpleGrid>
+
+        <Divider my="sm" />
+
+        <SimpleGrid cols={{ base: 2, sm: 3, lg: 5 }} spacing="xs" verticalSpacing="xs">
+          <Box>
+            <Text size="xs" c="dimmed">
+              Altitude (Min / Max)
+            </Text>
+            <Text fw={600}>{altMin == null || altMax == null ? "—" : `${altMin} / ${altMax} m`}</Text>
+          </Box>
+
+          <Box>
+            <Text size="xs" c="dimmed">
+              Vario (Min / Max)
+            </Text>
+            <Text fw={600}>{vMin == null || vMax == null ? "—" : `${vMin.toFixed(1)} / ${vMax.toFixed(1)} m/s`}</Text>
+          </Box>
+
+          <Box>
+            <Text size="xs" c="dimmed">
+              Speed (Avg / Max)
+            </Text>
+            <Text fw={600}>
+              {spAvg == null ? "—" : spAvg.toFixed(1)} / {spMax == null ? "—" : spMax.toFixed(1)} km/h
+            </Text>
+          </Box>
+
+          <Box>
+            <Text size="xs" c="dimmed">
+              Climb / Sink / Glide
+            </Text>
+            <Text fw={600}>{mixText}</Text>
+          </Box>
+
+          <Box>
+            <Text size="xs" c="dimmed">
+              Longest climb phase
+            </Text>
+            <Text fw={600}>
+              {bestClimbT == null || bestClimbDAlt == null ? "—" : `${fmtTime(bestClimbT)} (${fmtSigned(bestClimbDAlt, 0)} m)`}
+            </Text>
+          </Box>
+        </SimpleGrid>
+      </Paper>
+    );
+  }, [
+    showStats,
+    segmentStats,
+    varioWindowSec,
+    statsSource,
+    climbNavActive,
+    activeClimbIndex,
+    climbs.length,
+    statsRange.startSec,
+    statsRange.endSec,
+    winTotalSec,
+  ]);
+
+  // ✅ NEW: compact list for settings drawer (top N)
+  const compactClimbs = React.useMemo(() => {
+    const MAX = 6;
+    return sortedClimbs.slice(0, MAX);
+  }, [sortedClimbs]);
+
   return (
     <Box p="md">
       <Stack gap="sm">
@@ -212,28 +391,16 @@ export function FlightDetailsRoute() {
 
                 <Text size="xs" c="dimmed">
                   {flight?.flightDate ? new Date(flight.flightDate).toLocaleDateString() : ""}
-                  {currentFlightPos >= 0 && flightIds.length > 0
-                    ? ` · ${currentFlightPos + 1} / ${flightIds.length}`
-                    : ""}
+                  {currentFlightPos >= 0 && flightIds.length > 0 ? ` · ${currentFlightPos + 1} / ${flightIds.length}` : ""}
                 </Text>
               </Box>
 
               <Group gap="xs" align="center" wrap="nowrap">
-                <Button
-                  size="xs"
-                  variant="light"
-                  disabled={navBusy || prevFlightId == null}
-                  onClick={() => prevFlightId != null && goFlight(prevFlightId)}
-                >
+                <Button size="xs" variant="light" disabled={navBusy || prevFlightId == null} onClick={() => prevFlightId != null && goFlight(prevFlightId)}>
                   ← Prev
                 </Button>
 
-                <Button
-                  size="xs"
-                  variant="light"
-                  disabled={navBusy || nextFlightId == null}
-                  onClick={() => nextFlightId != null && goFlight(nextFlightId)}
-                >
+                <Button size="xs" variant="light" disabled={navBusy || nextFlightId == null} onClick={() => nextFlightId != null && goFlight(nextFlightId)}>
                   Next →
                 </Button>
               </Group>
@@ -248,11 +415,7 @@ export function FlightDetailsRoute() {
               </Button>
 
               <Text size="sm" fw={600} style={{ minWidth: 110, textAlign: "center" }}>
-                {climbNavActive
-                  ? `Climb ${activeClimbIndex! + 1} / ${climbs.length}`
-                  : hasClimbs
-                    ? `${climbs.length} climbs`
-                    : "No climbs"}
+                {climbNavActive ? `Climb ${activeClimbIndex! + 1} / ${climbs.length}` : hasClimbs ? `${climbs.length} climbs` : "No climbs"}
               </Text>
 
               <Button size="xs" variant="subtle" onClick={nextClimb} disabled={!hasClimbs}>
@@ -261,6 +424,14 @@ export function FlightDetailsRoute() {
 
               <Button size="xs" variant="subtle" onClick={clearActiveClimb} disabled={!climbNavActive}>
                 ✕
+              </Button>
+              <Button
+                size="xs"
+                variant="light"
+                onClick={focusActiveClimb}
+                disabled={!activeClimb || !computed?.fixesFull?.length}
+              >
+                Focus active climb
               </Button>
             </Group>
           </Group>
@@ -361,16 +532,151 @@ export function FlightDetailsRoute() {
 
             <Divider my="sm" />
 
-            <Group justify="space-between">
-              <Button
-                size="xs"
-                variant="light"
-                onClick={focusActiveClimb}
-                disabled={!activeClimb || !computed?.fixesFull?.length}
-              >
-                Focus active climb
-              </Button>
+            {/* ✅ NEW: Climbs block inside settings drawer */}
+            <Box>
+              <Group justify="space-between" align="center" mb={6}>
+                <Group gap="xs" align="center">
+                  <Text fw={600} size="sm">
+                    Climbs
+                  </Text>
+                  <Badge variant="light">{climbs.length}</Badge>
+                </Group>
 
+                <Button
+                  size="xs"
+                  variant="subtle"
+                  disabled={!hasClimbs}
+                  onClick={() => {
+                    setSettingsOpen(false);
+                    setClimbListOpen(true);
+                  }}
+                >
+                  Show all…
+                </Button>
+              </Group>
+
+              {!hasClimbs ? (
+                <Text c="dimmed" size="sm">
+                  No climbs detected.
+                </Text>
+              ) : (
+                <>
+                  <Chip.Group
+                    value={climbSortMode}
+                    onChange={(v) => setClimbSortMode((v ?? "normal") as any)}
+                  >
+                    <Group gap="xs">
+                      <Chip value="normal" radius="sm">
+                        Normal
+                      </Chip>
+                      <Chip value="gainDesc" radius="sm">
+                        Gain ↓
+                      </Chip>
+                      <Chip value="gainAsc" radius="sm">
+                        Gain ↑
+                      </Chip>
+                    </Group>
+                  </Chip.Group>
+
+                  <Divider my="sm" />
+
+                  <Box
+                    style={{
+                      maxHeight: 280,
+                      overflowY: "auto",
+                      paddingRight: 6,
+                    }}
+                  >
+                    <Stack gap="xs">
+                      {compactClimbs.map((c, listIdx) => {
+                        const f = computed?.fixesFull ?? [];
+                        const sSec = f[c.startIdx]?.tSec ?? null;
+                        const eSec = f[c.endIdx]?.tSec ?? null;
+
+                        const durSec =
+                          typeof sSec === "number" && typeof eSec === "number"
+                            ? Math.max(0, eSec - sSec)
+                            : null;
+
+                        const originalIndex = climbs.findIndex(
+                          (cl) => cl.startIdx === c.startIdx && cl.endIdx === c.endIdx
+                        );
+
+                        const isActive =
+                          originalIndex !== -1 && activeClimbIndex === originalIndex;
+
+                        return (
+                          <Paper
+                            key={`${c.startIdx}-${c.endIdx}-${listIdx}`}
+                            withBorder
+                            p="sm"
+                            radius="md"
+                            style={{
+                              cursor: "pointer",
+                              borderColor: isActive ? "rgba(255,212,0,0.9)" : undefined,
+                              boxShadow: isActive
+                                ? "0 0 0 2px rgba(255,212,0,0.25)"
+                                : undefined,
+                            }}
+                            onClick={() => {
+                              if (originalIndex !== -1) {
+                                suppressAutoPanOnceRef.current = true;
+                                setActiveClimbIndex(originalIndex);
+                              }
+                              setSettingsOpen(false);
+                            }}
+                          >
+                            <Group justify="space-between" align="flex-start" wrap="nowrap">
+                              <Box>
+                                <Text fw={700} size="sm">
+                                  Climb {originalIndex !== -1 ? originalIndex + 1 : listIdx + 1}
+                                </Text>
+                                <Text size="xs" c="dimmed">
+                                  {durSec == null ? "—" : fmtTime(durSec)} ·{" "}
+                                  {Math.round(c.startAltM)} → {Math.round(c.peakAltM)} m
+                                </Text>
+                              </Box>
+
+                              <Text fw={700} size="sm">
+                                {durSec && durSec > 0 ? `${(c.gainM / durSec).toFixed(2)} m/s` : "—"}
+                              </Text>
+                            </Group>
+
+                            <Group justify="flex-end" mt="xs">
+                              <Button
+                                size="xs"
+                                variant="subtle"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  if (originalIndex !== -1) {
+                                    suppressAutoPanOnceRef.current = true;
+                                    setActiveClimbIndex(originalIndex);
+                                  }
+                                  setSettingsOpen(false);
+                                  queueMicrotask(() => focusActiveClimb());
+                                }}
+                              >
+                                Focus
+                              </Button>
+                            </Group>
+                          </Paper>
+                        );
+                      })}
+                    </Stack>
+                  </Box>
+
+                  {sortedClimbs.length > compactClimbs.length && (
+                    <Text size="xs" c="dimmed" mt="xs">
+                      Showing {compactClimbs.length} of {sortedClimbs.length}. Use “Show all…” for the full list.
+                    </Text>
+                  )}
+                </>
+              )}
+            </Box>
+
+            <Divider my="sm" />
+
+            <Group justify="space-between">
               <Button size="xs" variant="light" onClick={() => setSettingsOpen(false)}>
                 Close
               </Button>
@@ -522,10 +828,7 @@ export function FlightDetailsRoute() {
                 const sSec = f[c.startIdx]?.tSec ?? null;
                 const eSec = f[c.endIdx]?.tSec ?? null;
 
-                const durSec =
-                  typeof sSec === "number" && typeof eSec === "number"
-                    ? Math.max(0, eSec - sSec)
-                    : null;
+                const durSec = typeof sSec === "number" && typeof eSec === "number" ? Math.max(0, eSec - sSec) : null;
 
                 const originalIndex = climbs.findIndex((cl) => cl.startIdx === c.startIdx && cl.endIdx === c.endIdx);
 
@@ -542,16 +845,8 @@ export function FlightDetailsRoute() {
                     onMouseLeave={() => setHoveredClimbIndex(null)}
                     style={{
                       cursor: "pointer",
-                      borderColor: isActive
-                        ? "rgba(255,212,0,0.9)"
-                        : isHover
-                          ? "rgba(255,212,0,0.45)"
-                          : undefined,
-                      boxShadow: isActive
-                        ? "0 0 0 2px rgba(255,212,0,0.35)"
-                        : isHover
-                          ? "0 0 0 1px rgba(255,212,0,0.25)"
-                          : undefined,
+                      borderColor: isActive ? "rgba(255,212,0,0.9)" : isHover ? "rgba(255,212,0,0.45)" : undefined,
+                      boxShadow: isActive ? "0 0 0 2px rgba(255,212,0,0.35)" : isHover ? "0 0 0 1px rgba(255,212,0,0.25)" : undefined,
                       background: isHover ? "rgba(255,212,0,0.06)" : undefined,
                       transition: "background 120ms ease, box-shadow 120ms ease, border-color 120ms ease",
                     }}
@@ -670,17 +965,7 @@ export function FlightDetailsRoute() {
                 overflow: "hidden",
               }}
             >
-              <FlightStatsPanel
-                show={showStats}
-                segmentStats={segmentStats as any}
-                varioWindowSec={varioWindowSec}
-                statsSource={statsSource}
-                climbNavActive={climbNavActive}
-                activeClimbIndex={activeClimbIndex}
-                climbsLength={climbs.length}
-                statsRange={statsRange}
-                winTotalSec={winTotalSec}
-              />
+              {StatsPanel}
 
               <Box style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", gap: 10 }}>
                 {showAlt && (
