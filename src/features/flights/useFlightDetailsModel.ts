@@ -881,7 +881,7 @@ export function useFlightDetailsModel(args: { id: string; token: string | null |
         const inst = kind === "alt" ? altInstRef.current : kind === "vario" ? varioInstRef.current : speedInstRef.current;
         if (!inst) return;
 
-        const dzId = kind === "alt" ? "dz_inside_alt" : kind === "vario" ? "dz_inside_vario" : "dz_inside_speed";
+        const dzId = "dz_inside_x";
 
         try {
             inst.setOption({ dataZoom: [{ id: dzId, disabled: !enabled, moveOnMouseMove: enabled }] }, { silent: true });
