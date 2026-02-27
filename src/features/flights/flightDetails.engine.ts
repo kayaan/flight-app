@@ -206,14 +206,16 @@ export const ALT_AXIS_POINTER = {
 
 export const ALT_GRID = { left: 56, right: 16, top: 24, bottom: 40 } as const;
 
+const DZ_INSIDE_X = "dz_inside_x";
+
 export const ALT_DATAZOOM = [
-    { id: "dz_inside_alt", type: "inside", xAxisIndex: 0, moveOnMouseMove: true },
+    { id: DZ_INSIDE_X, type: "inside", xAxisIndex: 0, moveOnMouseMove: true },
     { id: "dz_slider_alt", type: "slider", xAxisIndex: 0, height: 20, bottom: 8 },
 ] as const;
 
-export const VARIO_DATAZOOM = [{ id: "dz_inside_vario", type: "inside", xAxisIndex: 0, moveOnMouseMove: true }] as const;
+export const VARIO_DATAZOOM = [{ id: DZ_INSIDE_X, type: "inside", xAxisIndex: 0, moveOnMouseMove: true }] as const;
 
-export const SPEED_DATAZOOM = [{ id: "dz_inside_speed", type: "inside", xAxisIndex: 0, moveOnMouseMove: true }] as const;
+export const SPEED_DATAZOOM = [{ id: DZ_INSIDE_X, type: "inside", xAxisIndex: 0, moveOnMouseMove: true }] as const;
 
 // ------------------------------
 // SERIES CALCULATIONS
